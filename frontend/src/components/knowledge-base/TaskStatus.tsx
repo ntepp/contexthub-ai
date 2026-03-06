@@ -6,11 +6,12 @@ import { getTaskStatus } from '@/lib/api'
 interface Props {
   taskId: string
   filename: string
+  onFinished?: () => void
 }
 
 type Status = 'PENDING' | 'STARTED' | 'SUCCESS' | 'FAILURE' | 'RETRY'
 
-export function TaskStatus({ taskId, filename }: Props) {
+export function TaskStatus({ taskId, filename, onFinished }: Props) {
   const [status, setStatus] = useState<Status>('PENDING')
 
   useEffect(() => {
@@ -19,14 +20,18 @@ export function TaskStatus({ taskId, filename }: Props) {
     const interval = setInterval(async () => {
       try {
         const data = await getTaskStatus(taskId)
-        setStatus(data.status as Status)
+        const newStatus = data.status as Status
+        setStatus(newStatus)
+        if (newStatus === 'SUCCESS' || newStatus === 'FAILURE') {
+          onFinished?.()
+        }
       } catch {
         // backend unreachable, keep polling
       }
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [taskId, status])
+  }, [taskId, status, onFinished])
 
   const isTerminal = status === 'SUCCESS' || status === 'FAILURE'
 

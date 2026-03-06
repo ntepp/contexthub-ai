@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.db.models import Collection
+from src.db.models import Collection, Document
 from src.db.session import get_db, init_db
 from src.rag.rag_pipeline import create_and_run_graph, load_source
 from src.workers.celery_app import celery_app
@@ -92,6 +92,32 @@ async def create_collection(body: CollectionCreate, db: Session = Depends(get_db
 
 
 # ---------------------------------------------------------------------------
+# Documents
+# ---------------------------------------------------------------------------
+
+@app.get("/documents")
+async def list_documents(collection: str = "default", db: Session = Depends(get_db)):
+    """List all documents indexed in a collection with their status."""
+    docs = (
+        db.query(Document)
+        .filter(Document.collection_name == collection)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(d.id),
+            "filename": d.filename,
+            "collection": d.collection_name,
+            "status": d.status,
+            "chunk_count": d.chunk_count,
+            "created_at": d.created_at.isoformat(),
+        }
+        for d in docs
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Document ingestion
 # ---------------------------------------------------------------------------
 
@@ -116,6 +142,17 @@ async def upload_pdf(
         db.commit()
 
     task = ingest_document.delay(str(dest), collection)
+
+    # Track the document in hub_documents
+    doc = Document(
+        filename=file.filename,
+        collection_name=collection,
+        status="indexing",
+        task_id=task.id,
+    )
+    db.add(doc)
+    db.commit()
+
     return {"task_id": task.id, "status": "pending", "collection": collection}
 
 
@@ -166,21 +203,29 @@ async def ask_question_endpoint(request: QuestionRequest):
 
 @app.get("/models")
 async def list_models():
-    """Return available LLM models (Ollama local + OpenAI static list)."""
+    """Return chat/generate LLM models only — embedding models are excluded."""
+    _EMBEDDING_FAMILIES = {"bert", "nomic-bert"}
+    _EMBEDDING_NAME_PATTERNS = ("embed", "bge-", "e5-", "gte-", "minilm")
+
+    def _is_embedding(m: dict) -> bool:
+        families = m.get("details", {}).get("families") or []
+        if any(f in _EMBEDDING_FAMILIES for f in families):
+            return True
+        return any(p in m.get("name", "").lower() for p in _EMBEDDING_NAME_PATTERNS)
+
     models = []
 
-    # Ollama local models
     ollama_base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{ollama_base}/api/tags")
             if resp.status_code == 200:
                 for m in resp.json().get("models", []):
-                    models.append({"id": m["name"], "provider": "ollama", "name": m["name"]})
+                    if not _is_embedding(m):
+                        models.append({"id": m["name"], "provider": "ollama", "name": m["name"]})
     except Exception:
-        pass  # Ollama not running — skip
+        pass
 
-    # OpenAI models (static, only shown when API key is set)
     if os.getenv("OPENAI_API_KEY"):
         for name in ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]:
             models.append({"id": name, "provider": "openai", "name": name})

@@ -31,6 +31,18 @@ export interface AskResponse {
 export const askQuestion = (question: string, collection = 'default') =>
   api.post<AskResponse>('/ask', { question, collection }).then((r) => r.data)
 
+// Documents
+export interface StoredDocument {
+  id: string
+  filename: string
+  collection: string
+  status: 'indexing' | 'ready' | 'failed'
+  chunk_count: number
+  created_at: string
+}
+export const getDocuments = (collection: string) =>
+  api.get<StoredDocument[]>(`/documents?collection=${encodeURIComponent(collection)}`).then((r) => r.data)
+
 // Models
 export interface Model {
   id: string
