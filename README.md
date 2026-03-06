@@ -1,6 +1,6 @@
 # local_contexthub_rag
 
-`local_contexthub_rag` is a Retrieval Augmented Generation (RAG) application that lets you upload PDFs or web pages and ask questions about their content. It uses local or cloud LLMs (via a factory pattern), `nomic-embed-text` for embeddings, ChromaDB for vector storage, Redis for caching, and Celery for async document ingestion.
+`local_contexthub_rag` is a Retrieval Augmented Generation (RAG) application that lets you upload PDFs or web pages and ask questions about their content. It uses local or cloud LLMs (via a factory pattern), `bge-m3` for embeddings (multilingual, 8192-token context), ChromaDB for vector storage, Redis for caching, and Celery for async document ingestion.
 
 ## Features
 
@@ -21,11 +21,11 @@
 PDF Upload (POST /upload)
   → Save to ./uploads/
   → Celery task dispatched → task_id returned immediately
-  → Worker: PDFDataLoader → split_text() → nomic-embed-text → ChromaDB
+  → Worker: PDFDataLoader → split_text() → bge-m3 → ChromaDB
   → Redis key set (source cached)
 
 URL Load (POST /load)
-  → Synchronous: WebDataLoader → split_text() → nomic-embed-text → ChromaDB
+  → Synchronous: WebDataLoader → split_text() → bge-m3 → ChromaDB
 
 Question (POST /ask)
   → LangGraph: retrieve (ChromaDB similarity search, threshold ≥ 0.50)
@@ -72,7 +72,7 @@ Question (POST /ask)
 
     ```bash
     ollama pull deepseek-r1       # or your chosen model (e.g. llama3.1:8b)
-    ollama pull nomic-embed-text
+    ollama pull bge-m3
     ```
 
 5. **Configure environment:**
@@ -197,7 +197,7 @@ local_contexthub_rag/
 │   ├── vector_store/           # Vector storage module
 │   │   ├── base.py             # Abstract base + VectorStoreConfig
 │   │   ├── chroma.py           # ChromaDB implementation (embedded)
-│   │   ├── embeddings.py       # nomic-embed-text via Ollama
+│   │   ├── embeddings.py       # bge-m3 via Ollama
 │   │   ├── factory.py          # VectorStoreFactory (chroma / in_memory)
 │   │   └── in_memory.py        # In-memory store (no persistence)
 │   │
