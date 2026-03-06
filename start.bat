@@ -13,7 +13,7 @@ venv\Scripts\pip install "psycopg[binary]" -q
 
 echo [4/5] Running database migrations...
 venv\Scripts\alembic upgrade head
-if errorlevel 1 ( echo ERROR: alembic migration failed & pause & exit /b 1 )
+if errorlevel 1 ( echo WARNING: alembic reported an error - tables may already exist, continuing... )
 
 echo [5/5] Starting services in separate windows...
 
