@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Send, StopCircle } from 'lucide-react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { Send, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { askQuestion, getCollections } from '@/lib/api'
+import { streamAnswer, getCollections } from '@/lib/api'
 import { MessageBubble, type Message } from '@/components/chat/MessageBubble'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 
@@ -10,12 +10,12 @@ interface Collection { id: string; name: string }
 export function Chat() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [streaming, setStreaming] = useState(false)
   const [model, setModel] = useState('')
   const [collection, setCollection] = useState('default')
   const [collections, setCollections] = useState<Collection[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     getCollections().then(setCollections).catch(() => {})
@@ -23,29 +23,66 @@ export function Chat() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+  }, [messages])
 
-  const send = async () => {
+  const stop = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
+
+  const send = useCallback(async () => {
     const q = input.trim()
-    if (!q || loading) return
+    if (!q || streaming) return
+
     setInput('')
     setMessages((prev) => [...prev, { role: 'user', content: q }])
-    setLoading(true)
-    try {
-      const res = await askQuestion(q, collection)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: res.answer, sources: res.sources },
-      ])
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Error contacting backend. Is the API running?' },
-      ])
-    } finally {
-      setLoading(false)
-    }
-  }
+
+    // Add an empty assistant message that we'll fill token by token
+    setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+    setStreaming(true)
+
+    const abort = new AbortController()
+    abortRef.current = abort
+
+    await streamAnswer(q, collection, {
+      signal: abort.signal,
+      onToken: (token) => {
+        setMessages((prev) => {
+          const updated = [...prev]
+          const last = updated[updated.length - 1]
+          if (last?.role === 'assistant') {
+            updated[updated.length - 1] = { ...last, content: last.content + token }
+          }
+          return updated
+        })
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      },
+      onSources: (sources) => {
+        setMessages((prev) => {
+          const updated = [...prev]
+          const last = updated[updated.length - 1]
+          if (last?.role === 'assistant') {
+            updated[updated.length - 1] = { ...last, sources }
+          }
+          return updated
+        })
+      },
+      onDone: () => setStreaming(false),
+      onError: () => {
+        setMessages((prev) => {
+          const updated = [...prev]
+          const last = updated[updated.length - 1]
+          if (last?.role === 'assistant' && !last.content) {
+            updated[updated.length - 1] = {
+              ...last,
+              content: 'Error contacting backend. Is the API running?',
+            }
+          }
+          return updated
+        })
+        setStreaming(false)
+      },
+    })
+  }, [input, streaming, collection])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -60,8 +97,6 @@ export function Chat() {
       <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-surface shrink-0">
         <div className="flex items-center gap-3">
           <ModelSelector value={model} onChange={setModel} />
-
-          {/* Collection selector */}
           <select
             value={collection}
             onChange={(e) => setCollection(e.target.value)}
@@ -74,7 +109,7 @@ export function Chat() {
           </select>
         </div>
 
-        {messages.length > 0 && (
+        {messages.length > 0 && !streaming && (
           <button
             onClick={() => setMessages([])}
             className="text-xs text-muted-fg hover:text-secondary transition-colors"
@@ -92,26 +127,17 @@ export function Chat() {
             <p className="text-sm text-muted-fg">Ask anything about your documents</p>
           </div>
         ) : (
-          messages.map((m, i) => <MessageBubble key={i} {...m} />)
-        )}
-
-        {loading && (
-          <div className="flex gap-3 animate-fade-in">
-            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-accent/10 text-accent shrink-0">
-              <span className="text-xs">✦</span>
-            </div>
-            <div className="bg-surface border border-border rounded-2xl rounded-tl-sm px-4 py-3">
-              <div className="flex gap-1.5 items-center h-4">
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="w-1.5 h-1.5 rounded-full bg-accent/60 animate-bounce"
-                    style={{ animationDelay: `${i * 150}ms` }}
-                  />
-                ))}
+          messages.map((m, i) => {
+            const isStreamingLast = streaming && i === messages.length - 1 && m.role === 'assistant'
+            return (
+              <div key={i} className={cn(isStreamingLast && 'relative')}>
+                <MessageBubble {...m} />
+                {isStreamingLast && m.content && (
+                  <span className="inline-block w-0.5 h-4 bg-accent ml-0.5 animate-pulse align-middle" />
+                )}
               </div>
-            </div>
-          </div>
+            )
+          })
         )}
         <div ref={bottomRef} />
       </div>
@@ -125,13 +151,13 @@ export function Chat() {
           )}
         >
           <textarea
-            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask a question… (Shift+Enter for new line)"
             rows={1}
-            className="flex-1 bg-transparent text-sm text-primary placeholder-muted-fg resize-none outline-none max-h-40 leading-relaxed"
+            disabled={streaming}
+            className="flex-1 bg-transparent text-sm text-primary placeholder-muted-fg resize-none outline-none max-h-40 leading-relaxed disabled:opacity-50"
             style={{ height: 'auto' }}
             onInput={(e) => {
               const t = e.currentTarget
@@ -140,16 +166,18 @@ export function Chat() {
             }}
           />
           <button
-            onClick={loading ? undefined : send}
-            disabled={!input.trim() && !loading}
+            onClick={streaming ? stop : send}
+            disabled={!streaming && !input.trim()}
             className={cn(
               'flex items-center justify-center w-8 h-8 rounded-xl transition-all shrink-0',
-              input.trim() && !loading
+              streaming
+                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                : input.trim()
                 ? 'bg-accent text-white hover:bg-accent/80'
                 : 'bg-muted/30 text-muted-fg cursor-not-allowed',
             )}
           >
-            {loading ? <StopCircle size={14} /> : <Send size={14} />}
+            {streaming ? <Square size={12} fill="currentColor" /> : <Send size={14} />}
           </button>
         </div>
         <p className="text-center text-[10px] text-muted-fg mt-2 opacity-50">

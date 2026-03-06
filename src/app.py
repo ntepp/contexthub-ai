@@ -8,13 +8,14 @@ from typing import Optional
 import httpx
 from celery.result import AsyncResult
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.db.models import Collection, Document
 from src.db.session import get_db, init_db
-from src.rag.rag_pipeline import create_and_run_graph, load_source
+from src.rag.rag_pipeline import create_and_run_graph, load_source, stream_answer
 from src.workers.celery_app import celery_app
 from src.workers.tasks import ingest_document
 
@@ -195,6 +196,16 @@ async def ask_question_endpoint(request: QuestionRequest):
         return {"answer": result["answer"], "sources": result["sources"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ask/stream")
+async def ask_stream_endpoint(request: QuestionRequest):
+    """Streaming version of /ask — returns Server-Sent Events."""
+    return StreamingResponse(
+        stream_answer(request.question, collection=request.collection),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------

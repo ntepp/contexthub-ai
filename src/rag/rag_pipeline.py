@@ -1,3 +1,6 @@
+import json
+from typing import AsyncGenerator
+
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 from langgraph.graph import START, StateGraph
@@ -84,6 +87,34 @@ def load_source(source: str, collection: str = "default") -> None:
         vector_store.add_documents(documents=all_splits)
         cache_url(client, cache_key)
         print(f"Source '{source}' ingested into collection '{collection}'.")
+
+
+async def stream_answer(question: str, collection: str = "default") -> AsyncGenerator[str, None]:
+    """Async generator that yields SSE-formatted events for a streaming chat response."""
+    threshold = 0.50
+    vector_store = _get_vector_store(collection)
+    results = vector_store.similarity_search_with_score(question)
+    docs = [doc for doc, score in results if score >= threshold]
+
+    if not docs:
+        yield f"data: {json.dumps({'type': 'token', 'content': \"I don't know. thanks for asking!\"})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return
+
+    sources = [
+        {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
+        for doc in docs
+    ]
+    context = "\n\n".join(doc.page_content for doc in docs)
+    messages = prompt.invoke({"question": question, "context": context})
+    llm = initialize_model_llm()
+
+    async for chunk in llm.astream(messages):
+        if chunk.content:
+            yield f"data: {json.dumps({'type': 'token', 'content': chunk.content})}\n\n"
+
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
 def create_and_run_graph(question: str, collection: str = "default") -> dict:
