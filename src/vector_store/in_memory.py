@@ -1,6 +1,6 @@
 from typing import List
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from .base import BaseVectorStoreManager
 

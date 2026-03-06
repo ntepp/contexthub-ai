@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 class BaseVectorStoreManager(ABC):
     """Abstract base class for vector store management."""

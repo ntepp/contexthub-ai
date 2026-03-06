@@ -3,12 +3,12 @@ from typing import Optional
 
 from .base import BaseVectorStoreManager, VectorStoreConfig
 from .in_memory import InMemoryVectorStoreManager
-from .qdrant import QdrantVectorStoreManager
+from .chroma import ChromaVectorStoreManager
 
 class VectorStoreType(Enum):
     """Enum for vector store types."""
     IN_MEMORY = "in_memory"
-    QDRANT = "qdrant"
+    CHROMA = "chroma"
 
 class VectorStoreFactory:
     """Factory for creating vector store managers."""
@@ -32,7 +32,7 @@ class VectorStoreFactory:
         """
         managers = {
             VectorStoreType.IN_MEMORY: InMemoryVectorStoreManager,
-            VectorStoreType.QDRANT: QdrantVectorStoreManager
+            VectorStoreType.CHROMA: ChromaVectorStoreManager,
         }
         
         manager_class = managers.get(store_type)
@@ -43,31 +43,25 @@ class VectorStoreFactory:
 
 # Convenience function
 def create_vector_store(
-    embeddings, 
-    use_in_memory_store: bool = True,
+    embeddings,
+    store_type: VectorStoreType = VectorStoreType.CHROMA,
     config: Optional[VectorStoreConfig] = None
 ):
     """
     Convenience function to create a vector store.
-    
+
     Args:
         embeddings: Embedding model.
-        use_in_memory_store (bool): Flag to use in-memory or Qdrant store.
+        store_type (VectorStoreType): Type of vector store to use.
         config (Optional[VectorStoreConfig]): Configuration for vector store.
-    
+
     Returns:
         Vector store instance.
     """
-    store_type = (
-        VectorStoreType.IN_MEMORY 
-        if use_in_memory_store 
-        else VectorStoreType.QDRANT
-    )
-    
     manager = VectorStoreFactory.create_vector_store_manager(
-        embeddings, 
-        store_type, 
+        embeddings,
+        store_type,
         config
     )
-    
+
     return manager.create_vector_store()

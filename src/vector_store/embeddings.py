@@ -1,7 +1,8 @@
+import os
+
 from langchain_ollama.embeddings import OllamaEmbeddings
 
 
 def initialize_embeddings():
-    """Initializes OpenAI embeddings."""
-    embeddings = OllamaEmbeddings(model='nomic-embed-text')
-    return embeddings
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    return OllamaEmbeddings(model="nomic-embed-text", base_url=base_url)
