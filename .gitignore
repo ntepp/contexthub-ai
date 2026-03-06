@@ -24,4 +24,9 @@ dump.rdb
 
 # OS generated files
 .DS_Store
-Thumbs.db
+Thumbs.db# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Uploads staging
+uploads/

@@ -15,3 +15,8 @@ uvicorn
 pypdf
 celery[redis]
 python-multipart
+langchain-postgres
+psycopg[binary]
+sqlalchemy
+alembic
+httpx
