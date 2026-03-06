@@ -13,6 +13,9 @@
 * **Redis Caching:** Tracks processed sources so re-uploading the same file is a no-op.
 * **Sourced Answers:** Every answer from `/ask` includes the source documents and page numbers used to generate it.
 * **Chunk Quality Filter:** Noise chunks (e.g. 2D-DOC QR barcodes) are automatically discarded — only meaningful text with ≥ 40% alphabetic characters is stored.
+* **Streaming Responses:** Chat answers stream token-by-token via Server-Sent Events — no waiting for the full response. Stop mid-stream at any time.
+* **Document Listing:** The Knowledge Base page shows all indexed documents with their status (Indexing / Ready / Failed) and chunk count, persisted in PostgreSQL.
+* **Model Filtering:** `GET /models` returns only chat/generate models — embedding models (bge-m3, etc.) are automatically excluded from the UI.
 * **React Frontend:** Dark-themed UI with retractable sidebar, Knowledge Base upload page, and Chat page with model selector.
 * **Interactive CLI:** Ask multiple questions on the same loaded context without restarting.
 
@@ -34,6 +37,11 @@ Question (POST /ask)
   → LangGraph: retrieve (pgvector similarity search, threshold ≥ 0.50, scoped to collection)
              → generate (LLM via factory: Ollama or OpenAI)
   → Returns: { answer, sources: [{source, page}] }
+
+Question streaming (POST /ask/stream)
+  → retrieve (same as above)
+  → stream tokens via llm.astream() → Server-Sent Events
+  → Events: {type:token}, {type:sources}, {type:done}
 ```
 
 ### LangChain & LangGraph Integration
@@ -114,35 +122,45 @@ Question (POST /ask)
 
 ## Usage
 
-### Frontend (recommended)
+### Quick start (recommended)
 
-Start all services, then launch the dev server:
+**Windows:**
+```bat
+start.bat   ← starts everything
+stop.bat    ← stops everything
+```
+
+**Linux / macOS:**
+```bash
+chmod +x start.sh stop.sh
+./start.sh   # starts everything
+./stop.sh    # stops everything
+```
+
+The scripts handle: Docker services, Alembic migrations, Celery worker, FastAPI backend, and React dev server.
+
+### Manual start
 
 ```bash
+# 1. Infrastructure
+docker-compose up -d
+
+# 2. Migrations (first run only)
+alembic upgrade head
+
+# 3. Celery worker
+celery -A src.workers.celery_app worker --loglevel=info
+
+# 4. Backend
+uvicorn src.app:app --reload
+
+# 5. Frontend
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) — the UI connects to the backend via `/api` proxy.
+Open [http://localhost:5173](http://localhost:5173) for the UI, or [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger.
 
-### API mode
-
-Start the FastAPI server:
-
-```bash
-uvicorn src.app:app --reload
-```
-
-Open Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs).
-
-### Start the Celery worker
-
-Required for `POST /upload` to process files:
-
-```bash
-celery -A src.workers.celery_app worker --loglevel=info
-```
-
-> **Windows note:** The worker automatically uses the `solo` pool to avoid `PermissionError (WinError 5)` caused by Windows' lack of `fork()` support. For production concurrency on Windows, install `gevent` and pass `--pool=gevent`.
+> **Windows note:** The Celery worker automatically uses the `solo` pool to avoid `PermissionError (WinError 5)`. For production concurrency, install `gevent` and pass `--pool=gevent`.
 
 ### CLI mode
 
@@ -161,8 +179,10 @@ Enter a URL or local PDF path, then ask questions interactively. Answers include
 | `POST` | `/upload?collection=<name>` | Upload PDF (async) → `{ task_id, status }` |
 | `GET` | `/tasks/{id}` | Poll Celery task status |
 | `POST` | `/load` | Synchronous load `{ source, collection }` |
+| `GET` | `/documents?collection=<name>` | List indexed documents with status |
 | `POST` | `/ask` | Q&A `{ question, collection }` → `{ answer, sources }` |
-| `GET` | `/models` | List available Ollama + OpenAI models |
+| `POST` | `/ask/stream` | Streaming Q&A via Server-Sent Events |
+| `GET` | `/models` | List chat LLM models (embedding models excluded) |
 
 **Ask a question:**
 ```http
@@ -225,6 +245,8 @@ local_contexthub_rag/
 ├── uploads/                    # Uploaded PDFs staging area (auto-created)
 ├── .env                        # Environment variables
 ├── docker-compose.yaml         # Redis + PostgreSQL (pgvector)
+├── start.bat / start.sh        # One-command startup scripts
+├── stop.bat / stop.sh          # One-command shutdown scripts
 ├── requirements.txt
 └── README.md
 ```
