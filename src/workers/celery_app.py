@@ -16,3 +16,9 @@ celery_app = Celery(
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
+
+# Windows: prefork uses shared semaphores that trigger PermissionError (WinError 5).
+# Use 'solo' by default; override with --pool=gevent for production concurrency.
+import sys
+if sys.platform == "win32":
+    celery_app.conf.worker_pool = "solo"

@@ -1,16 +1,19 @@
 # local_contexthub_rag
 
-`local_contexthub_rag` is a Retrieval Augmented Generation (RAG) application that lets you upload PDFs or web pages and ask questions about their content. It uses local or cloud LLMs (via a factory pattern), `bge-m3` for embeddings (multilingual, 8192-token context), ChromaDB for vector storage, Redis for caching, and Celery for async document ingestion.
+`local_contexthub_rag` is a Retrieval Augmented Generation (RAG) application that lets you upload PDFs or web pages and ask questions about their content. It uses local or cloud LLMs (via a factory pattern), `bge-m3` for multilingual embeddings, **PostgreSQL + pgvector** for vector storage, Redis for caching, Celery for async document ingestion, and a **React frontend** for a modern web interface.
 
 ## Features
 
 * **PDF & Web Page Loading:** Upload PDFs via the API or load any URL; content is chunked, embedded, and stored automatically.
 * **Async Ingestion:** PDF uploads are processed asynchronously via Celery workers — the API returns immediately with a `task_id` to poll.
+* **Collections:** Organize documents into named collections (e.g. "Dossier RH"). Each upload and query is scoped to a collection.
 * **Local & Cloud LLMs:** Switch between Ollama (local) and OpenAI via a single env variable — no code change needed.
-* **ChromaDB Vector Storage:** Embedded, file-based vector store — no separate service required. Data persists in `./chroma_db/`.
+* **Model Discovery:** `GET /models` returns all available Ollama models + OpenAI models dynamically.
+* **pgvector Storage:** Vectors stored in PostgreSQL via `langchain-postgres` — persistent, queryable, production-ready.
 * **Redis Caching:** Tracks processed sources so re-uploading the same file is a no-op.
 * **Sourced Answers:** Every answer from `/ask` includes the source documents and page numbers used to generate it.
-* **Chunk Quality Filter:** Noise chunks (e.g. 2D-DOC QR barcodes extracted as base32 strings) are automatically discarded before indexing — only meaningful text with ≥ 40% alphabetic characters is stored.
+* **Chunk Quality Filter:** Noise chunks (e.g. 2D-DOC QR barcodes) are automatically discarded — only meaningful text with ≥ 40% alphabetic characters is stored.
+* **React Frontend:** Dark-themed UI with retractable sidebar, Knowledge Base upload page, and Chat page with model selector.
 * **Interactive CLI:** Ask multiple questions on the same loaded context without restarting.
 
 ## Architecture
@@ -18,32 +21,33 @@
 ### Data Flow
 
 ```
-PDF Upload (POST /upload)
+PDF Upload (POST /upload?collection=<name>)
   → Save to ./uploads/
   → Celery task dispatched → task_id returned immediately
-  → Worker: PDFDataLoader → split_text() → bge-m3 → ChromaDB
-  → Redis key set (source cached)
+  → Worker: PDFDataLoader → split_text() → bge-m3 → pgvector (PostgreSQL)
+  → Redis key set (collection:source cached)
 
 URL Load (POST /load)
-  → Synchronous: WebDataLoader → split_text() → bge-m3 → ChromaDB
+  → Synchronous: WebDataLoader → split_text() → bge-m3 → pgvector
 
 Question (POST /ask)
-  → LangGraph: retrieve (ChromaDB similarity search, threshold ≥ 0.50)
+  → LangGraph: retrieve (pgvector similarity search, threshold ≥ 0.50, scoped to collection)
              → generate (LLM via factory: Ollama or OpenAI)
   → Returns: { answer, sources: [{source, page}] }
 ```
 
 ### LangChain & LangGraph Integration
 
-* **LangChain:** Document loading, text splitting, embedding generation, vector store interaction.
-* **LangGraph:** Orchestrates the two-step `retrieve → generate` pipeline with typed state.
+* **LangChain:** Document loading, text splitting, embedding generation, pgvector interaction.
+* **LangGraph:** Orchestrates the two-step `retrieve → generate` pipeline with typed state (includes `collection` field).
 * **LangSmith:** Optional observability — tracks pipeline execution, helps identify bottlenecks.
 
 ## Prerequisites
 
 * Python 3.9+
 * [Ollama](https://ollama.com/) installed and running locally (if using local LLMs)
-* Docker (for Redis only)
+* Docker (for Redis + PostgreSQL)
+* Node.js 18+ (for the frontend)
 
 ## Installation
 
@@ -62,73 +66,108 @@ Question (POST /ask)
     venv\Scripts\activate      # Windows
     ```
 
-3. **Install dependencies:**
+3. **Install Python dependencies:**
 
     ```bash
     pip install -r requirements.txt
     ```
 
-4. **Pull Ollama models:**
+4. **Install frontend dependencies:**
 
     ```bash
-    ollama pull deepseek-r1       # or your chosen model (e.g. llama3.1:8b)
-    ollama pull bge-m3
+    cd frontend && npm install && cd ..
     ```
 
-5. **Configure environment:**
+5. **Pull Ollama models:**
 
-    Copy `.env` and set your values:
+    ```bash
+    ollama pull llama3.1:8b    # or your chosen LLM
+    ollama pull bge-m3         # embedding model
+    ```
+
+6. **Configure environment:**
+
+    Edit `.env` with your values:
 
     ```env
     LLM_PROVIDER=ollama          # or: openai
-    LLM_MODEL_NAME=deepseek-r1   # e.g. llama3.1:8b, gpt-4o
+    LLM_MODEL_NAME=llama3.1:8b   # e.g. deepseek-r1, gpt-4o
     OPENAI_API_KEY=              # required only when LLM_PROVIDER=openai
+    POSTGRES_HOST=localhost
+    POSTGRES_PORT=5432
+    POSTGRES_USER=postgres
+    POSTGRES_PASSWORD=postgres
+    POSTGRES_DB=contexthub
     ```
 
-6. **Start Redis (only service needed via Docker):**
+7. **Start infrastructure (Redis + PostgreSQL):**
 
     ```bash
     docker-compose up
     ```
 
+8. **Run database migrations:**
+
+    ```bash
+    alembic upgrade head
+    ```
+
 ## Usage
 
-### API mode (recommended)
+### Frontend (recommended)
+
+Start all services, then launch the dev server:
+
+```bash
+cd frontend && npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) — the UI connects to the backend via `/api` proxy.
+
+### API mode
 
 Start the FastAPI server:
 
 ```bash
-uvicorn src.app:app
+uvicorn src.app:app --reload
 ```
 
 Open Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-**Upload a PDF (async):**
-```http
-POST /upload
-Content-Type: multipart/form-data
-file: <your_file.pdf>
+### Start the Celery worker
 
-→ { "task_id": "abc123", "status": "pending" }
+Required for `POST /upload` to process files:
+
+```bash
+celery -A src.workers.celery_app worker --loglevel=info
 ```
 
-**Poll ingestion status:**
-```http
-GET /tasks/abc123
+> **Windows note:** The worker automatically uses the `solo` pool to avoid `PermissionError (WinError 5)` caused by Windows' lack of `fork()` support. For production concurrency on Windows, install `gevent` and pass `--pool=gevent`.
 
-→ { "task_id": "abc123", "status": "SUCCESS", "result": { "status": "success", "file": "doc.pdf" } }
+### CLI mode
+
+```bash
+python -m src.main
 ```
 
-**Load a URL (synchronous):**
-```http
-POST /load
-{ "source": "https://example.com/article" }
-```
+Enter a URL or local PDF path, then ask questions interactively. Answers include source references.
+
+## API Reference
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/collections` | List all collections |
+| `POST` | `/collections` | Create a collection `{ name, description? }` |
+| `POST` | `/upload?collection=<name>` | Upload PDF (async) → `{ task_id, status }` |
+| `GET` | `/tasks/{id}` | Poll Celery task status |
+| `POST` | `/load` | Synchronous load `{ source, collection }` |
+| `POST` | `/ask` | Q&A `{ question, collection }` → `{ answer, sources }` |
+| `GET` | `/models` | List available Ollama + OpenAI models |
 
 **Ask a question:**
 ```http
 POST /ask
-{ "question": "What is the main topic?" }
+{ "question": "What is the main topic?", "collection": "Dossier RH" }
 
 → {
     "answer": "The main topic is... thanks for asking!",
@@ -138,22 +177,6 @@ POST /ask
     ]
   }
 ```
-
-### Start the Celery worker
-
-The worker must be running for `POST /upload` to process files:
-
-```bash
-celery -A src.workers.celery_app worker --loglevel=info
-```
-
-### CLI mode
-
-```bash
-python -m src.main
-```
-
-Enter a URL or local PDF path, then ask questions interactively. Answers include source references.
 
 ## Configuration
 
@@ -166,52 +189,42 @@ All configuration is done via `.env`:
 | `OPENAI_API_KEY` | OpenAI API key | *(only for openai)* |
 | `REDIS_HOST` | Redis hostname | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
+| `POSTGRES_HOST` | PostgreSQL hostname | `localhost` |
+| `POSTGRES_PORT` | PostgreSQL port | `5432` |
+| `POSTGRES_USER` | PostgreSQL user | `postgres` |
+| `POSTGRES_PASSWORD` | PostgreSQL password | `postgres` |
+| `POSTGRES_DB` | Database name | `contexthub` |
+| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 
 ## Project Structure
 
 ```
 local_contexthub_rag/
+├── frontend/                   # React + Vite + TypeScript + TailwindCSS
+│   └── src/
+│       ├── components/
+│       │   ├── chat/           # ModelSelector, MessageBubble (markdown)
+│       │   ├── knowledge-base/ # UploadZone, TaskStatus (Celery polling)
+│       │   └── layout/         # Sidebar (retractable), AppLayout
+│       ├── pages/              # Chat.tsx, KnowledgeBase.tsx
+│       └── lib/                # api.ts (all backend calls), utils.ts
+│
 ├── src/
-│   ├── cache/                  # Caching module
-│   │   ├── base.py             # Abstract cache base classes
-│   │   ├── factory.py          # Cache factory (Redis)
-│   │   └── redis_cache.py      # Redis implementation
-│   │
-│   ├── data_loading/           # Data loading strategies
-│   │   ├── abstract_loader.py  # Abstract base loader
-│   │   ├── pdf_loader.py       # PDF loader (PyPDFLoader)
-│   │   ├── text_splitter.py    # RecursiveCharacterTextSplitter
-│   │   ├── webpage_loader.py   # Web page loader
-│   │   └── website_loader.py   # Website crawler loader
-│   │
-│   ├── llm/                    # LLM abstraction layer
-│   │   ├── factory.py          # LLMFactory: Ollama / OpenAI via LLM_PROVIDER
-│   │   └── llm_chain.py        # initialize_model_llm() convenience wrapper
-│   │
-│   ├── rag/                    # RAG pipeline
-│   │   └── rag_pipeline.py     # load_source() + LangGraph retrieve→generate
-│   │
-│   ├── utils/
-│   │   └── source_type.py      # Classifies input as url / pdf / unknown
-│   │
-│   ├── vector_store/           # Vector storage module
-│   │   ├── base.py             # Abstract base + VectorStoreConfig
-│   │   ├── chroma.py           # ChromaDB implementation (embedded)
-│   │   ├── embeddings.py       # bge-m3 via Ollama
-│   │   ├── factory.py          # VectorStoreFactory (chroma / in_memory)
-│   │   └── in_memory.py        # In-memory store (no persistence)
-│   │
-│   ├── workers/                # Async task processing
-│   │   ├── celery_app.py       # Celery app wired to Redis broker + backend
-│   │   └── tasks.py            # ingest_document task
-│   │
-│   ├── app.py                  # FastAPI: /upload, /tasks/{id}, /load, /ask
+│   ├── cache/                  # Redis-backed source caching
+│   ├── data_loading/           # PDF + web loaders, text splitter
+│   ├── db/                     # SQLAlchemy models (Collection), session
+│   ├── llm/                    # LLMFactory: Ollama / OpenAI
+│   ├── rag/                    # LangGraph pipeline (retrieve → generate)
+│   ├── utils/                  # source_type classifier
+│   ├── vector_store/           # pgvector (default), ChromaDB (legacy), in-memory
+│   ├── workers/                # Celery app + ingest_document task
+│   ├── app.py                  # FastAPI application
 │   └── main.py                 # Interactive CLI
 │
-├── chroma_db/                  # ChromaDB persistent storage (auto-created)
+├── alembic/                    # Database migrations
 ├── uploads/                    # Uploaded PDFs staging area (auto-created)
 ├── .env                        # Environment variables
-├── docker-compose.yaml         # Redis only
+├── docker-compose.yaml         # Redis + PostgreSQL (pgvector)
 ├── requirements.txt
 └── README.md
 ```
