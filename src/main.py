@@ -38,8 +38,11 @@ def main():
                 break  # Go back to setting a new source
 
             try:
-                answer = create_and_run_graph(question)
-                print("\nAnswer:", answer)
+                result = create_and_run_graph(question)
+                print("\nAnswer:", result["answer"])
+                if result["sources"]:
+                    unique = {s["source"] for s in result["sources"]}
+                    print("Sources:", ", ".join(unique))
             except Exception as e:
                 print(f"\nAn error occurred: {e}")
 
