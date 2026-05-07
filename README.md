@@ -74,33 +74,35 @@ Generic chatbots hallucinate. Keyword search misses context. ContextHub AI solve
 
 ## Product Preview
 
-### Streamlit Demo UI
+### Document Ingestion — Async PDF Upload
 
-| Feature | Description |
-|---|---|
-| Document Upload | Upload PDF → async Celery job → live polling until indexed |
-| Grounded Q&A | Question → retrieved context → LLM answer with sources |
-| Confidence Score | Average pgvector similarity score of top-3 retrieved chunks |
-| Latency Metric | End-to-end pipeline time (retrieve + generate) in seconds |
-| System Sidebar | Live operational metrics from `/metrics` endpoint |
+![Knowledge Base](docs/screenshots/demo-upload.png)
 
-```bash
-streamlit run demo_ui.py
-# → http://localhost:8501
-```
+Upload a PDF and track its ingestion status in real time. The job is processed by a Celery worker in the background — the API returns immediately with a `task_id`. The UI polls until the document status reaches `ready`.
+
+---
+
+### Grounded Question Answering
+
+![Q&A Demo](docs/screenshots/demo-ask.png)
+
+Every answer is derived strictly from indexed documents. The sidebar exposes live operational metrics (LLM provider, model, vector store, system status). Each response includes a **Retrieval Confidence** score (mean pgvector similarity of top-3 chunks) and an **End-to-end Latency** measurement.
+
+---
+
+### API — Swagger UI
+
+![Swagger UI](docs/screenshots/swagger-ui.png)
+
+Auto-generated interactive API documentation at `http://localhost:8000/docs`. All 10 endpoints are documented with request/response schemas.
+
+---
 
 ### React Frontend
 
 Full-featured web interface at `http://localhost:5173`:
 - **Knowledge Base** page — drag-and-drop PDF upload, real-time Celery task polling, indexed document list
 - **Chat** page — streaming token-by-token responses via SSE, model selector, collection picker
-
-### Swagger UI
-
-Auto-generated interactive API documentation:
-```
-http://localhost:8000/docs
-```
 
 ---
 

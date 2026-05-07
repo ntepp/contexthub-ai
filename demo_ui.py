@@ -41,8 +41,8 @@ with st.sidebar:
 
     st.subheader("Observability")
     st.markdown(
-        "[🔍 LangSmith Traces](https://smith.langchain.com/projects/p/contexthub-ai)"
-        " — live retrieval & generation traces"
+        "[🔍 LangSmith Traces](https://smith.langchain.com)"
+        " → project **contexthub-ai**"
     )
     st.divider()
 
@@ -75,7 +75,7 @@ def _get_collections() -> list[str]:
         return ["default"]
 
 
-def _poll_task(task_id: str, max_wait: int = 60) -> dict:
+def _poll_task(task_id: str, max_wait: int = 300) -> dict:
     """Poll GET /tasks/{id} until terminal state or timeout."""
     deadline = time.time() + max_wait
     while time.time() < deadline:
@@ -117,7 +117,7 @@ with tab_kb:
                     f"{API_BASE}/upload",
                     params={"collection": col_select},
                     files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
-                    timeout=30,
+                    timeout=120,
                 )
                 resp.raise_for_status()
                 task_data = resp.json()

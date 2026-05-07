@@ -22,7 +22,7 @@ def _update_document_status(task_id: str, status: str, chunk_count: int = 0) -> 
         pass  # DB update failure must not crash the task
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, time_limit=600, soft_time_limit=540)
 def ingest_document(self, file_path: str, collection: str = "default") -> dict:
     """Async Celery task: load, embed and index a document into pgvector."""
     try:
