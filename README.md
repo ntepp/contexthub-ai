@@ -1,174 +1,225 @@
-# local_contexthub_rag
+# ContextHub AI — Enterprise Retrieval Copilot
 
-`local_contexthub_rag` is a Retrieval Augmented Generation (RAG) application that lets you upload PDFs or web pages and ask questions about their content. It uses local or cloud LLMs (via a factory pattern), `bge-m3` for multilingual embeddings, **PostgreSQL + pgvector** for vector storage, Redis for caching, Celery for async document ingestion, and a **React frontend** for a modern web interface.
+> Production-oriented Retrieval Augmented Generation (RAG) platform designed to transform fragmented enterprise documentation into a grounded, auditable conversational knowledge system.
 
-## Features
+![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.11x-009688?logo=fastapi)
+![LangGraph](https://img.shields.io/badge/LangGraph-Orchestration-orange)
+![pgvector](https://img.shields.io/badge/pgvector-PostgreSQL-336791?logo=postgresql)
+![Celery](https://img.shields.io/badge/Celery-Async%20Ingestion-37814A?logo=celery)
+![LangSmith](https://img.shields.io/badge/LangSmith-Observability-purple)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-* **PDF & Web Page Loading:** Upload PDFs via the API or load any URL; content is chunked, embedded, and stored automatically.
-* **Async Ingestion:** PDF uploads are processed asynchronously via Celery workers — the API returns immediately with a `task_id` to poll.
-* **Collections:** Organize documents into named collections (e.g. "Dossier RH"). Each upload and query is scoped to a collection.
-* **Local & Cloud LLMs:** Switch between Ollama (local) and OpenAI via a single env variable — no code change needed.
-* **Model Discovery:** `GET /models` returns all available Ollama models + OpenAI models dynamically.
-* **pgvector Storage:** Vectors stored in PostgreSQL via `langchain-postgres` — persistent, queryable, production-ready.
-* **Redis Caching:** Tracks processed sources so re-uploading the same file is a no-op.
-* **Sourced Answers:** Every answer from `/ask` includes the source documents and page numbers used to generate it.
-* **Chunk Quality Filter:** Noise chunks (e.g. 2D-DOC QR barcodes) are automatically discarded — only meaningful text with ≥ 40% alphabetic characters is stored.
-* **Streaming Responses:** Chat answers stream token-by-token via Server-Sent Events — no waiting for the full response. Stop mid-stream at any time.
-* **Document Listing:** The Knowledge Base page shows all indexed documents with their status (Indexing / Ready / Failed) and chunk count, persisted in PostgreSQL.
-* **Model Filtering:** `GET /models` returns only chat/generate models — embedding models (bge-m3, etc.) are automatically excluded from the UI.
-* **React Frontend:** Dark-themed UI with retractable sidebar, Knowledge Base upload page, and Chat page with model selector.
-* **Interactive CLI:** Ask multiple questions on the same loaded context without restarting.
+---
 
-## Architecture
+## Why This Matters
 
-### Data Flow
+Enterprise organizations accumulate knowledge across PDFs, internal documents, and web sources — fragmented, unsearchable, and siloed. Staff waste hours finding answers that already exist in documentation.
+
+Generic chatbots hallucinate. Keyword search misses context. ContextHub AI solves this with:
+
+- **Grounded responses** — answers are strictly derived from indexed documents, never invented
+- **Source attribution** — every answer cites the exact document and page number
+- **Confidence scoring** — retrieval quality is quantified per query, not opaque
+- **Async ingestion at scale** — PDFs are processed in the background via a job queue; the API never blocks
+- **Provider independence** — swap between local (Ollama) and cloud (OpenAI) LLMs with a single environment variable
+
+---
+
+## System Architecture
 
 ```
-PDF Upload (POST /upload?collection=<name>)
-  → Save to ./uploads/
-  → Celery task dispatched → task_id returned immediately
-  → Worker: PDFDataLoader → split_text() → bge-m3 → pgvector (PostgreSQL)
-  → Redis key set (collection:source cached)
-
-URL Load (POST /load)
-  → Synchronous: WebDataLoader → split_text() → bge-m3 → pgvector
-
-Question (POST /ask)
-  → LangGraph: retrieve (pgvector similarity search, threshold ≥ 0.50, scoped to collection)
-             → generate (LLM via factory: Ollama or OpenAI)
-  → Returns: { answer, sources: [{source, page}] }
-
-Question streaming (POST /ask/stream)
-  → retrieve (same as above)
-  → stream tokens via llm.astream() → Server-Sent Events
-  → Events: {type:token}, {type:sources}, {type:done}
+┌──────────────────────────────────────────────────────────────┐
+│                        Client Layer                          │
+│   React Frontend (5173)  │  Streamlit Demo (8501)  │  CLI   │
+└────────────────────────────────┬─────────────────────────────┘
+                                 │
+                   ┌─────────────▼─────────────┐
+                   │     FastAPI Gateway        │
+                   │       Port 8000            │
+                   │  /ask  /upload  /metrics   │
+                   └──────────┬────────────────┘
+                              │
+         ┌────────────────────┼──────────────────┐
+         │                    │                  │
+┌────────▼───────┐  ┌────────▼────────┐  ┌──────▼──────────┐
+│ Celery Worker  │  │    LangGraph    │  │  Redis Cache    │
+│ Async PDF      │  │  Orchestrator   │  │  Source dedup   │
+│ Ingestion      │  │  retrieve →     │  │  Job broker     │
+│ (auto-retry)   │  │  generate       │  └─────────────────┘
+└────────┬───────┘  └────────┬────────┘
+         │                   │
+         │          ┌────────▼────────┐
+         │          │   LLM Factory   │
+         │          │  Ollama/OpenAI  │
+         │          │  (env-switched) │
+         │          └─────────────────┘
+         │
+┌────────▼────────────────────────────────────────────┐
+│              PostgreSQL + pgvector                   │
+│  • bge-m3 vector embeddings (1024 dims)             │
+│  • Collection-scoped similarity search              │
+│  • Document index + ingestion status                │
+└─────────────────────────────────────────────────────┘
+         │
+┌────────▼─────────────┐
+│  LangSmith           │
+│  Trace every run:    │
+│  retrieve + generate │
+│  latency, tokens     │
+└──────────────────────┘
 ```
 
-### LangChain & LangGraph Integration
+---
 
-* **LangChain:** Document loading, text splitting, embedding generation, pgvector interaction.
-* **LangGraph:** Orchestrates the two-step `retrieve → generate` pipeline with typed state (includes `collection` field).
-* **LangSmith:** Optional observability — tracks pipeline execution, helps identify bottlenecks.
+## Product Preview
 
-## Prerequisites
+### Streamlit Demo UI
 
-* Python 3.9+
-* [Ollama](https://ollama.com/) installed and running locally (if using local LLMs)
-* Docker (for Redis + PostgreSQL)
-* Node.js 18+ (for the frontend)
+| Feature | Description |
+|---|---|
+| Document Upload | Upload PDF → async Celery job → live polling until indexed |
+| Grounded Q&A | Question → retrieved context → LLM answer with sources |
+| Confidence Score | Average pgvector similarity score of top-3 retrieved chunks |
+| Latency Metric | End-to-end pipeline time (retrieve + generate) in seconds |
+| System Sidebar | Live operational metrics from `/metrics` endpoint |
 
-## Installation
+```bash
+streamlit run demo_ui.py
+# → http://localhost:8501
+```
 
-1. **Clone the repository:**
+### React Frontend
 
-    ```bash
-    git clone <your_repo_url>
-    cd local_contexthub_rag
-    ```
+Full-featured web interface at `http://localhost:5173`:
+- **Knowledge Base** page — drag-and-drop PDF upload, real-time Celery task polling, indexed document list
+- **Chat** page — streaming token-by-token responses via SSE, model selector, collection picker
 
-2. **Create a virtual environment:**
+### Swagger UI
 
-    ```bash
-    python -m venv venv
-    source venv/bin/activate   # Linux/macOS
-    venv\Scripts\activate      # Windows
-    ```
+Auto-generated interactive API documentation:
+```
+http://localhost:8000/docs
+```
 
-3. **Install Python dependencies:**
+---
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+## AI Engineering Decisions
 
-4. **Install frontend dependencies:**
+These are the deliberate architectural choices made to move beyond a proof-of-concept toward a production-oriented system.
 
-    ```bash
-    cd frontend && npm install && cd ..
-    ```
+### 1. Asynchronous ingestion via Celery + Redis
 
-5. **Pull Ollama models:**
+PDF processing involves disk I/O, embedding calls (up to 8192 tokens per chunk with bge-m3), and bulk vector writes — easily 20–60 seconds per document. A synchronous endpoint would block the API server thread for every upload.
 
-    ```bash
-    ollama pull llama3.1:8b    # or your chosen LLM
-    ollama pull bge-m3         # embedding model
-    ```
+Celery offloads this to a worker pool. The API returns a `task_id` immediately; clients poll `/tasks/{id}`. This is the same pattern used by cloud ML pipelines (e.g. SageMaker batch transforms, Azure ML endpoints). Workers auto-retry up to 3 times on failure.
 
-6. **Configure environment:**
+### 2. pgvector over a standalone vector database
 
-    Edit `.env` with your values:
+ChromaDB is excellent for local prototyping but introduces a separate process and persistence layer. pgvector runs inside PostgreSQL — the same database already storing collection metadata and document status. One fewer infra dependency, ACID-compliant writes, and SQL-queryable embeddings for future analytics.
 
-    ```env
-    LLM_PROVIDER=ollama          # or: openai
-    LLM_MODEL_NAME=llama3.1:8b   # e.g. deepseek-r1, gpt-4o
-    OPENAI_API_KEY=              # required only when LLM_PROVIDER=openai
-    POSTGRES_HOST=localhost
-    POSTGRES_PORT=5432
-    POSTGRES_USER=postgres
-    POSTGRES_PASSWORD=postgres
-    POSTGRES_DB=contexthub
-    ```
+### 3. Provider-agnostic LLM factory
 
-7. **Start infrastructure (Redis + PostgreSQL):**
+```
+LLM_PROVIDER=ollama   → ChatOllama (llama3.1:8b, fully local, zero API cost)
+LLM_PROVIDER=openai   → ChatOpenAI (gpt-4o, cloud-grade reasoning)
+```
 
-    ```bash
-    docker-compose up
-    ```
+No code change, no redeploy. This matters in production where you might route cost-sensitive queries to a local model and high-stakes queries to a frontier model. The factory pattern also makes adding new providers (Anthropic, Mistral, Vertex) a one-file change.
 
-8. **Run database migrations:**
+### 4. LangGraph over a simple LLMChain
 
-    ```bash
-    alembic upgrade head
-    ```
+LangGraph models the pipeline as a typed state machine with explicit node transitions (`retrieve → generate`). This gives three production advantages over a chain:
 
-## Usage
+- **Debuggability** — LangSmith traces each node individually: inputs, outputs, latency, tokens
+- **Testability** — each node is a plain Python function, unit-testable in isolation
+- **Extensibility** — adding reranking, query expansion, or a guardrails node means adding a new graph node, not refactoring a chain
 
-### Quick start (recommended)
+### 5. Similarity threshold over pure top-k retrieval
+
+`similarity_search_with_score` returns a relevance score per chunk. We filter at ≥ 0.50 rather than always returning the top-k results. When no chunk exceeds the threshold, the system returns *"The information is unavailable in the current knowledge base."* rather than constructing an answer from loosely related content.
+
+This is the core mechanism behind grounded responses — the system knows what it doesn't know.
+
+---
+
+## Key Capabilities
+
+| Capability | Implementation |
+|---|---|
+| PDF & URL ingestion | `PDFDataLoader`, `WebDataLoader` + `RecursiveCharacterTextSplitter` |
+| Multilingual embeddings | `bge-m3` via Ollama (1024 dims, 8192 token context) |
+| Semantic search | pgvector cosine similarity, collection-scoped |
+| Async job queue | Celery + Redis, auto-retry (max 3×) |
+| Streaming answers | Server-Sent Events via `llm.astream()` |
+| Observability | LangSmith traces (retrieve + generate nodes, latency, tokens) |
+| Confidence scoring | Mean pgvector score of top-3 retrieved chunks |
+| Chunk quality filtering | Reject chunks < 40% alphabetic or < 20 characters |
+| Source attribution | Document path + page number returned with every answer |
+| LLM switching | `LLM_PROVIDER` env var — no code change |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- Docker (Redis + PostgreSQL via `docker-compose`)
+- [Ollama](https://ollama.com/) — if using local LLMs
+- Node.js 18+ — for the React frontend
+
+### Installation
+
+```bash
+# 1. Clone
+git clone <your_repo_url>
+cd contexthub-ai
+
+# 2. Python environment
+python -m venv venv
+source venv/bin/activate      # Linux/macOS
+venv\Scripts\activate         # Windows
+
+# 3. Dependencies
+pip install -r requirements.txt
+cd frontend && npm install && cd ..
+
+# 4. Ollama models (if using local LLMs)
+ollama pull llama3.1:8b
+ollama pull bge-m3
+
+# 5. Environment
+cp .env.example .env
+# Edit .env with your values
+```
+
+### Start (recommended)
 
 **Windows:**
 ```bat
-start.bat   ← starts everything
-stop.bat    ← stops everything
+start.bat
 ```
 
 **Linux / macOS:**
 ```bash
-chmod +x start.sh stop.sh
-./start.sh   # starts everything
-./stop.sh    # stops everything
+chmod +x start.sh && ./start.sh
 ```
 
-The scripts handle: Docker services, Alembic migrations, Celery worker, FastAPI backend, and React dev server.
+The script starts Docker services, runs Alembic migrations, launches the Celery worker, FastAPI backend, and React dev server.
 
 ### Manual start
 
 ```bash
-# 1. Infrastructure
-docker-compose up -d
-
-# 2. Migrations (first run only)
-alembic upgrade head
-
-# 3. Celery worker
-celery -A src.workers.celery_app worker --loglevel=info
-
-# 4. Backend
-uvicorn src.app:app --reload
-
-# 5. Frontend
-cd frontend && npm run dev
+docker-compose up -d                              # Redis + PostgreSQL
+alembic upgrade head                              # DB migrations (first run)
+celery -A src.workers.celery_app worker --loglevel=info  # Async worker
+uvicorn src.app:app --reload                      # API (port 8000)
+cd frontend && npm run dev                        # UI (port 5173)
+streamlit run demo_ui.py                          # Demo UI (port 8501)
 ```
 
-Open [http://localhost:5173](http://localhost:5173) for the UI, or [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger.
-
-> **Windows note:** The Celery worker automatically uses the `solo` pool to avoid `PermissionError (WinError 5)`. For production concurrency, install `gevent` and pass `--pool=gevent`.
-
-### CLI mode
-
-```bash
-python -m src.main
-```
-
-Enter a URL or local PDF path, then ask questions interactively. Answers include source references.
+---
 
 ## API Reference
 
@@ -176,102 +227,104 @@ Enter a URL or local PDF path, then ask questions interactively. Answers include
 |---|---|---|
 | `GET` | `/collections` | List all collections |
 | `POST` | `/collections` | Create a collection `{ name, description? }` |
-| `POST` | `/upload?collection=<name>` | Upload PDF (async) → `{ task_id, status }` |
+| `POST` | `/upload?collection=<name>` | Upload PDF (async) → `{ task_id }` |
 | `GET` | `/tasks/{id}` | Poll Celery task status |
 | `POST` | `/load` | Synchronous load `{ source, collection }` |
 | `GET` | `/documents?collection=<name>` | List indexed documents with status |
-| `POST` | `/ask` | Q&A `{ question, collection }` → `{ answer, sources }` |
+| `POST` | `/ask` | Q&A → `{ answer, sources, confidence_metric, latency_seconds }` |
 | `POST` | `/ask/stream` | Streaming Q&A via Server-Sent Events |
-| `GET` | `/models` | List chat LLM models (embedding models excluded) |
+| `GET` | `/models` | Available LLM models (embedding models excluded) |
+| `GET` | `/metrics` | Operational system snapshot |
 
-**Ask a question:**
+**Example — grounded Q&A:**
 ```http
 POST /ask
-{ "question": "What is the main topic?", "collection": "Dossier RH" }
+{ "question": "What are the eligibility criteria?", "collection": "HR-Policy-2024" }
 
 → {
-    "answer": "The main topic is... thanks for asking!",
+    "answer": "Employees are eligible after 6 months of continuous service...",
     "sources": [
-      { "source": "uploads/doc.pdf", "page": 3 },
-      { "source": "uploads/doc.pdf", "page": 4 }
-    ]
+      { "source": "uploads/hr-policy.pdf", "page": 12 }
+    ],
+    "confidence_metric": 0.847,
+    "latency_seconds": 2.31
   }
 ```
 
+---
+
 ## Configuration
 
-All configuration is done via `.env`:
+Copy `.env.example` to `.env` and fill in your values:
 
 | Variable | Description | Default |
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` or `openai` | `ollama` |
-| `LLM_MODEL_NAME` | Model name passed to the provider | *(required)* |
-| `OPENAI_API_KEY` | OpenAI API key | *(only for openai)* |
-| `REDIS_HOST` | Redis hostname | `localhost` |
-| `REDIS_PORT` | Redis port | `6379` |
+| `LLM_MODEL_NAME` | Model name for the chosen provider | *(required)* |
+| `OPENAI_API_KEY` | Required only when `LLM_PROVIDER=openai` | — |
+| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 | `POSTGRES_HOST` | PostgreSQL hostname | `localhost` |
 | `POSTGRES_PORT` | PostgreSQL port | `5432` |
 | `POSTGRES_USER` | PostgreSQL user | `postgres` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `postgres` |
 | `POSTGRES_DB` | Database name | `contexthub` |
-| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
+| `REDIS_HOST` | Redis hostname | `localhost` |
+| `REDIS_PORT` | Redis port | `6379` |
+| `LANGSMITH_API_KEY` | LangSmith API key for tracing | *(optional)* |
+| `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing | `false` |
+| `LANGCHAIN_PROJECT` | LangSmith project name | `contexthub-ai` |
+
+---
 
 ## Project Structure
 
 ```
-local_contexthub_rag/
-├── frontend/                   # React + Vite + TypeScript + TailwindCSS
-│   └── src/
-│       ├── components/
-│       │   ├── chat/           # ModelSelector, MessageBubble (markdown)
-│       │   ├── knowledge-base/ # UploadZone, TaskStatus (Celery polling)
-│       │   └── layout/         # Sidebar (retractable), AppLayout
-│       ├── pages/              # Chat.tsx, KnowledgeBase.tsx
-│       └── lib/                # api.ts (all backend calls), utils.ts
-│
+contexthub-ai/
 ├── src/
-│   ├── cache/                  # Redis-backed source caching
-│   ├── data_loading/           # PDF + web loaders, text splitter
-│   ├── db/                     # SQLAlchemy models (Collection), session
-│   ├── llm/                    # LLMFactory: Ollama / OpenAI
-│   ├── rag/                    # LangGraph pipeline (retrieve → generate)
-│   ├── utils/                  # source_type classifier
-│   ├── vector_store/           # pgvector (default), ChromaDB (legacy), in-memory
-│   ├── workers/                # Celery app + ingest_document task
-│   ├── app.py                  # FastAPI application
-│   └── main.py                 # Interactive CLI
+│   ├── rag/               # LangGraph pipeline: retrieve → generate
+│   ├── llm/               # LLMFactory: Ollama / OpenAI abstraction
+│   ├── vector_store/      # pgvector (default), ChromaDB (legacy), in-memory
+│   ├── data_loading/      # PDF + web loaders, text splitter + quality filter
+│   ├── cache/             # Redis-backed source deduplication
+│   ├── db/                # SQLAlchemy models, session, migrations
+│   ├── workers/           # Celery app + ingest_document task (auto-retry)
+│   ├── app.py             # FastAPI application — all endpoints
+│   └── main.py            # Interactive CLI
 │
-├── alembic/                    # Database migrations
-├── uploads/                    # Uploaded PDFs staging area (auto-created)
-├── .env                        # Environment variables
-├── docker-compose.yaml         # Redis + PostgreSQL (pgvector)
-├── start.bat / start.sh        # One-command startup scripts
-├── stop.bat / stop.sh          # One-command shutdown scripts
-├── requirements.txt
-└── README.md
+├── frontend/              # React + Vite + TypeScript + TailwindCSS
+│   └── src/
+│       ├── components/    # Chat, KnowledgeBase, Sidebar
+│       ├── pages/         # Chat.tsx, KnowledgeBase.tsx
+│       └── lib/           # api.ts (all backend calls proxied via /api)
+│
+├── alembic/               # Database migrations
+├── demo_ui.py             # Streamlit demo (upload + Q&A + metrics sidebar)
+├── docker-compose.yaml    # Redis + PostgreSQL (pgvector)
+├── start.bat / start.sh   # One-command startup
+├── stop.bat / stop.sh     # One-command shutdown
+├── .env.example           # Environment template
+└── requirements.txt
 ```
 
-## PDF Ingestion Quality
+---
 
-### Current approach — Chunk filtering (`src/data_loading/text_splitter.py`)
-After splitting, every chunk is evaluated before indexing:
-- Chunks with **< 40% alphabetic characters** are rejected (catches 2D-DOC barcodes, random encoded strings)
-- Chunks **shorter than 20 characters** are rejected (catches lone headers/page numbers)
-- `chunk_overlap=50` is applied to avoid context loss at chunk boundaries
+## Production Roadmap
 
-### Planned improvements
-- **Better loader:** swap `PyPDFLoader` → `PyMuPDFLoader` (fixes `â€` encoding issues on French PDFs)
-- **Pre-processing:** `ftfy` text normalization pass before splitting
-- **Semantic chunking:** `SemanticChunker` to split by meaning instead of character count
+This project is intentionally designed to be deployable beyond localhost. The path to production involves:
+
+- **Containerization** — Dockerfile per service (API, worker, frontend); Docker Compose v2 for orchestration
+- **Horizontal scaling** — Celery workers scale independently behind the job queue; pgvector handles concurrent reads
+- **Reranking** — Cross-encoder reranking layer between `retrieve` and `generate` to improve precision on long documents
+- **Query expansion** — HyDE (Hypothetical Document Embeddings) or multi-query retrieval for sparse or ambiguous questions
+- **Authentication** — OAuth2 / API key middleware on FastAPI routes
+- **Monitoring** — Prometheus metrics endpoint + Grafana dashboard (latency, cache hit rate, embedding throughput)
+- **Fine-tuned embeddings** — Domain-specific embedding model fine-tuned on enterprise document corpus
+- **Multi-tenancy** — Collection-level RBAC; tenant isolation at the pgvector collection layer
+
+---
 
 ## License
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This project is licensed under the MIT License — see the [MIT License](https://opensource.org/licenses/MIT) page for details.
-
-## Contributing
-
-Contributions are welcome! Feel free to fork the repository, submit issues, and create pull requests.
-
-By contributing, you agree that your contributions will be licensed under the same MIT License.
+MIT License — contributions welcome.

@@ -7,7 +7,7 @@ from langchain_postgres.vectorstores import PGVector
 
 from .base import BaseVectorStoreManager, VectorStoreConfig
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class PGVectorConfig(VectorStoreConfig):

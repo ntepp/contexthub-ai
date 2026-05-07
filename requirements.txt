@@ -20,3 +20,6 @@ psycopg[binary]
 sqlalchemy
 alembic
 httpx
+streamlit
+requests
+langsmith

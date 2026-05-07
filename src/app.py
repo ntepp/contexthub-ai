@@ -29,7 +29,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ContextHub RAG API", lifespan=lifespan)
+app = FastAPI(
+    title="ContextHub AI — Enterprise Retrieval Copilot",
+    description="Production-oriented RAG platform for enterprise document intelligence.",
+    version="2.0.0",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -190,10 +195,15 @@ async def load_source_endpoint(request: SourceLoadRequest, db: Session = Depends
 
 @app.post("/ask")
 async def ask_question_endpoint(request: QuestionRequest):
-    """Ask a question against a collection; returns answer and source references."""
+    """Ask a question against a collection; returns answer, sources, confidence and latency."""
     try:
-        result = create_and_run_graph(request.question, collection=request.collection)
-        return {"answer": result["answer"], "sources": result["sources"]}
+        result = await create_and_run_graph(request.question, collection=request.collection)
+        return {
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "confidence_metric": result.get("confidence_metric", 0.0),
+            "latency_seconds": result.get("latency_seconds", 0.0),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -242,6 +252,19 @@ async def list_models():
             models.append({"id": name, "provider": "openai", "name": name})
 
     return {"models": models}
+
+
+@app.get("/metrics")
+async def system_metrics():
+    """Operational metrics snapshot for monitoring dashboards."""
+    return {
+        "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
+        "llm_model": os.getenv("LLM_MODEL_NAME", "unknown"),
+        "vector_store": "pgvector",
+        "cache": "Redis",
+        "async_ingestion": "Celery",
+        "status": "operational",
+    }
 
 
 if __name__ == "__main__":

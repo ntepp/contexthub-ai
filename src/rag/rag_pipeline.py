@@ -1,4 +1,5 @@
 import json
+import time
 from typing import AsyncGenerator
 
 from langchain_core.documents import Document
@@ -18,16 +19,19 @@ from src.vector_store.pgvector import PGVectorConfig
 
 embeddings = initialize_embeddings()
 
-template = """Use the following pieces of context to answer the question at the end.
-If you don't know the answer, just say that you don't know, don't try to make up an answer.
-Use three sentences maximum and keep the answer as concise as possible.
-Always say "thanks for asking!" at the end of the answer.
+template = """You are an enterprise knowledge assistant.
+Answer the user's question only from the provided context.
+If the answer is not explicitly supported by the context, say that the information is unavailable.
+Keep the answer concise, factual and professional.
+Provide a confidence level at the end: High, Medium or Low.
 
+Context:
 {context}
 
-Question: {question}
+Question:
+{question}
 
-Helpful Answer:"""
+Professional Answer:"""
 prompt = PromptTemplate.from_template(template)
 
 
@@ -37,11 +41,18 @@ class State(TypedDict):
     answer: str
     sources: List[dict]
     collection: str
+    confidence_metric: float
 
 
 def _get_vector_store(collection: str = "default"):
     config = PGVectorConfig(collection_name=collection)
     return create_vector_store(embeddings, store_type=VectorStoreType.PGVECTOR, config=config)
+
+
+def _build_graph():
+    graph_builder = StateGraph(State).add_sequence([retrieve, generate])
+    graph_builder.add_edge(START, "retrieve")
+    return graph_builder.compile()
 
 
 def retrieve(state: State):
@@ -51,23 +62,33 @@ def retrieve(state: State):
     retrieved_docs = [doc for doc, score in retrieved_docs_with_scores if score >= threshold]
 
     if not retrieved_docs:
-        return {"context": [], "answer": "I don't know. thanks for asking!", "sources": []}
+        return {
+            "context": [],
+            "answer": "The information is unavailable in the current knowledge base.",
+            "sources": [],
+            "confidence_metric": 0.0,
+        }
+
+    top_scores = [score for _, score in retrieved_docs_with_scores if score >= threshold][:3]
+    avg_score = round(sum(top_scores) / len(top_scores), 3)
 
     sources = [
         {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
         for doc in retrieved_docs
     ]
-    return {"context": retrieved_docs, "answer": None, "sources": sources}
+    return {"context": retrieved_docs, "answer": None, "sources": sources, "confidence_metric": avg_score}
 
 
-def generate(state: State):
+async def generate(state: State):
     if state.get("answer"):
         return {"answer": state["answer"]}
     docs_content = "\n\n".join(doc.page_content for doc in state["context"])
     messages = prompt.invoke({"question": state["question"], "context": docs_content})
     llm = initialize_model_llm()
-    response = llm.invoke(messages)
-    return {"answer": response.content}
+    full_response = ""
+    async for chunk in llm.astream(messages):
+        full_response += chunk.content
+    return {"answer": full_response}
 
 
 def load_source(source: str, collection: str = "default") -> None:
@@ -91,35 +112,34 @@ def load_source(source: str, collection: str = "default") -> None:
 
 async def stream_answer(question: str, collection: str = "default") -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted events for a streaming chat response."""
-    threshold = 0.50
-    vector_store = _get_vector_store(collection)
-    results = vector_store.similarity_search_with_score(question)
-    docs = [doc for doc, score in results if score >= threshold]
+    graph = _build_graph()
+    sources = []
 
-    if not docs:
-        yield f"data: {json.dumps({'type': 'token', 'content': \"I don't know. thanks for asking!\"})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        return
-
-    sources = [
-        {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
-        for doc in docs
-    ]
-    context = "\n\n".join(doc.page_content for doc in docs)
-    messages = prompt.invoke({"question": question, "context": context})
-    llm = initialize_model_llm()
-
-    async for chunk in llm.astream(messages):
-        if chunk.content:
-            yield f"data: {json.dumps({'type': 'token', 'content': chunk.content})}\n\n"
+    async for event in graph.astream_events(
+        {"question": question, "collection": collection},
+        version="v2",
+    ):
+        kind = event["event"]
+        if kind == "on_chat_model_stream":
+            content = event["data"]["chunk"].content
+            if content:
+                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+        elif kind == "on_chain_end" and event.get("name") == "retrieve":
+            output = event["data"].get("output", {})
+            sources = output.get("sources", [])
 
     yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
-def create_and_run_graph(question: str, collection: str = "default") -> dict:
-    graph_builder = StateGraph(State).add_sequence([retrieve, generate])
-    graph_builder.add_edge(START, "retrieve")
-    graph = graph_builder.compile()
-    response = graph.invoke({"question": question, "collection": collection})
-    return {"answer": response["answer"], "sources": response.get("sources", [])}
+async def create_and_run_graph(question: str, collection: str = "default") -> dict:
+    graph = _build_graph()
+    start = time.time()
+    response = await graph.ainvoke({"question": question, "collection": collection})
+    latency = round(time.time() - start, 2)
+    return {
+        "answer": response["answer"],
+        "sources": response.get("sources", []),
+        "confidence_metric": response.get("confidence_metric", 0.0),
+        "latency_seconds": latency,
+    }

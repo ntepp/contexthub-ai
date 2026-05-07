@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _build_url() -> str:

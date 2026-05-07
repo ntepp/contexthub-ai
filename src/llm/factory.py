@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class LLMProvider(Enum):
