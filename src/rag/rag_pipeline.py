@@ -105,7 +105,13 @@ def load_source(source: str, collection: str = "default") -> None:
         all_splits = split_text(docs)
 
         vector_store = _get_vector_store(collection)
-        vector_store.add_documents(documents=all_splits)
+        BATCH_SIZE = 32
+        total = len(all_splits)
+        print(f"[ingestion] {total} chunks a indexer par lots de {BATCH_SIZE}")
+        for i in range(0, total, BATCH_SIZE):
+            batch = all_splits[i:i + BATCH_SIZE]
+            vector_store.add_documents(documents=batch)
+            print(f"[ingestion] lot {i // BATCH_SIZE + 1} : {min(i + BATCH_SIZE, total)}/{total}")
         cache_url(client, cache_key)
         print(f"Source '{source}' ingested into collection '{collection}'.")
 
