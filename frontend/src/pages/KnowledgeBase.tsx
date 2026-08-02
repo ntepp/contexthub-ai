@@ -83,7 +83,7 @@ export function KnowledgeBase() {
         )}
 
         <div className="flex-1 overflow-y-auto p-2">
-          {['default', ...collections.map((c) => c.name)].map((name) => (
+          {[...new Set(['default', ...collections.map((c) => c.name)])].map((name) => (
             <button
               key={name}
               onClick={() => setActiveCollection(name)}

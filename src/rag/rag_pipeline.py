@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from typing import AsyncGenerator
 
@@ -12,12 +13,22 @@ from src.data_loading.pdf_loader import PDFDataLoader
 from src.data_loading.text_splitter import split_text
 from src.data_loading.webpage_loader import WebDataLoader
 from src.llm.llm_chain import initialize_model_llm
+from src.utils.logging_config import get_logger
 from src.utils.source_type import determine_source_type
 from src.vector_store.embeddings import initialize_embeddings
 from src.vector_store.factory import VectorStoreType, create_vector_store
 from src.vector_store.pgvector import PGVectorConfig
 
+log = get_logger()
+
 embeddings = initialize_embeddings()
+
+# langchain-postgres returns a cosine DISTANCE, not a similarity: 0.0 means
+# identical, higher means less relevant, and results arrive sorted ascending.
+# Chunks strictly above this distance are discarded.
+MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.75"))
+
+NO_ANSWER = "The information is unavailable in the current knowledge base."
 
 template = """You are an enterprise knowledge assistant.
 Answer the user's question only from the provided context.
@@ -56,27 +67,50 @@ def _build_graph():
 
 
 def retrieve(state: State):
-    threshold = 0.50
-    vector_store = _get_vector_store(state.get("collection", "default"))
-    retrieved_docs_with_scores = vector_store.similarity_search_with_score(state["question"])
-    retrieved_docs = [doc for doc, score in retrieved_docs_with_scores if score >= threshold]
+    collection = state.get("collection", "default")
+    vector_store = _get_vector_store(collection)
+    results = vector_store.similarity_search_with_score(state["question"])
+    kept = [(doc, dist) for doc, dist in results if dist <= MAX_DISTANCE]
 
-    if not retrieved_docs:
+    log.info("[retrieve] collection=%s question=%r", collection, state["question"])
+    log.info(
+        "[retrieve] %d/%d chunks retenus (max_distance=%.2f) — distances: %s",
+        len(kept),
+        len(results),
+        MAX_DISTANCE,
+        ", ".join(f"{d:.3f}" for _, d in results) or "aucun resultat",
+    )
+    for doc, dist in kept[:3]:
+        log.info(
+            "[retrieve]   d=%.3f | %s p.%s | %s",
+            dist,
+            doc.metadata.get("source", "?"),
+            doc.metadata.get("page", "?"),
+            doc.page_content[:150].replace("\n", " "),
+        )
+
+    if not kept:
+        log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
             "context": [],
-            "answer": "The information is unavailable in the current knowledge base.",
+            "answer": NO_ANSWER,
             "sources": [],
             "confidence_metric": 0.0,
         }
 
-    top_scores = [score for _, score in retrieved_docs_with_scores if score >= threshold][:3]
-    avg_score = round(sum(top_scores) / len(top_scores), 3)
+    top_distances = [dist for _, dist in kept[:3]]
+    confidence = round(1.0 - sum(top_distances) / len(top_distances), 3)
 
     sources = [
         {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
-        for doc in retrieved_docs
+        for doc, _ in kept
     ]
-    return {"context": retrieved_docs, "answer": None, "sources": sources, "confidence_metric": avg_score}
+    return {
+        "context": [doc for doc, _ in kept],
+        "answer": None,
+        "sources": sources,
+        "confidence_metric": confidence,
+    }
 
 
 async def generate(state: State):
@@ -85,9 +119,29 @@ async def generate(state: State):
     docs_content = "\n\n".join(doc.page_content for doc in state["context"])
     messages = prompt.invoke({"question": state["question"], "context": docs_content})
     llm = initialize_model_llm()
+
+    log.info(
+        "[generate] model=%s provider=%s | contexte: %d chunks, %d caracteres",
+        os.getenv("LLM_MODEL_NAME", "?"),
+        os.getenv("LLM_PROVIDER", "ollama"),
+        len(state["context"]),
+        len(docs_content),
+    )
+
+    start = time.time()
     full_response = ""
+    chunk_count = 0
     async for chunk in llm.astream(messages):
         full_response += chunk.content
+        chunk_count += 1
+
+    elapsed = time.time() - start
+    log.info("[generate] %d chunks recus en %.2fs (%d caracteres)", chunk_count, elapsed, len(full_response))
+    if not full_response.strip():
+        log.error("[generate] le modele n'a renvoye AUCUN contenu — reponse vide cote UI")
+    else:
+        log.info("[generate] reponse: %s", full_response)
+
     return {"answer": full_response}
 
 
@@ -120,6 +174,9 @@ async def stream_answer(question: str, collection: str = "default") -> AsyncGene
     """Async generator that yields SSE-formatted events for a streaming chat response."""
     graph = _build_graph()
     sources = []
+    streamed_chars = 0
+
+    log.info("[stream] debut — collection=%s question=%r", collection, question)
 
     async for event in graph.astream_events(
         {"question": question, "collection": collection},
@@ -129,10 +186,23 @@ async def stream_answer(question: str, collection: str = "default") -> AsyncGene
         if kind == "on_chat_model_stream":
             content = event["data"]["chunk"].content
             if content:
+                streamed_chars += len(content)
                 yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
         elif kind == "on_chain_end" and event.get("name") == "retrieve":
             output = event["data"].get("output", {})
             sources = output.get("sources", [])
+            # When retrieve short-circuits, generate returns its answer without
+            # invoking the LLM — no on_chat_model_stream event is ever emitted,
+            # so the message has to be pushed to the client here or the UI would
+            # render an empty bubble.
+            fallback = output.get("answer")
+            if fallback:
+                streamed_chars += len(fallback)
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
+
+    log.info("[stream] fin — %d caracteres envoyes, %d sources", streamed_chars, len(sources))
+    if streamed_chars == 0:
+        log.error("[stream] aucun caractere envoye au client — la bulle restera vide cote UI")
 
     yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
     yield f"data: {json.dumps({'type': 'done'})}\n\n"

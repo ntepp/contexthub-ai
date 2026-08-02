@@ -102,9 +102,8 @@ export function Chat() {
             onChange={(e) => setCollection(e.target.value)}
             className="bg-surface border border-border text-secondary text-sm rounded-lg px-3 py-1.5 outline-none focus:border-accent hover:border-muted transition-colors"
           >
-            <option value="default">default</option>
-            {collections.map((c) => (
-              <option key={c.id} value={c.name}>{c.name}</option>
+            {[...new Set(['default', ...collections.map((c) => c.name)])].map((name) => (
+              <option key={name} value={name}>{name}</option>
             ))}
           </select>
         </div>
