@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "corpus": "MiFID II (2014/65/UE), MiFIR (600/2014), EMIR (648/2012) — versions FR EUR-Lex",
+    "version": "0.1",
+    "created": "2025-08-06",
+    "notes": "Jeu de reference pour l'evaluation RAG. Reponses ancrees dans les textes EUR-Lex FR. Les entrees answerable=false sont des pieges de grounding : le bon comportement est le refus."
+  },
+  "questions": [
+    {
+      "id": "Q001",
+      "category": "factual_simple",
+      "question": "A partir de quelle date la directive MiFID II est-elle applicable selon le texte 2014/65/UE ?",
+      "ground_truth": "Selon l'article 93 du texte d'origine 2014/65/UE, les Etats membres appliquent ces dispositions a partir du 3 janvier 2017 (date d'application initiale ; report ulterieur au 3 janvier 2018 non couvert par ce corpus).",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 93",
+      "answerable": true
+    },
+    {
+      "id": "Q002",
+      "category": "definition",
+      "question": "Comment MiFID II definit-elle un systeme organise de negociation (OTF) ?",
+      "ground_truth": "[A VERIFIER DANS LE PDF] Un OTF est un systeme multilateral, autre qu'un marche reglemente ou un MTF, au sein duquel de multiples interets acheteurs et vendeurs de tiers pour des obligations, produits financiers structures, quotas d'emission ou instruments derives peuvent interagir d'une maniere aboutissant a la conclusion de contrats.",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 4, paragraphe 1, point 23)",
+      "answerable": true
+    },
+    {
+      "id": "Q003",
+      "category": "cross_document",
+      "question": "Quels instruments sont soumis a l'obligation de compensation, et ou sont definies les obligations de transparence applicables ?",
+      "ground_truth": "[A VERIFIER] L'obligation de compensation pour certaines categories de derives de gre a gre est etablie par EMIR (648/2012, article 4) ; les obligations de transparence et de declaration pour les derives negocies sur plate-forme sont definies par MiFIR (600/2014).",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf; RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "EMIR art. 4 ; MiFIR titres II-III",
+      "answerable": true
+    },
+    {
+      "id": "Q004",
+      "category": "reasoning_conditional",
+      "question": "Dans quel cas un internalisateur systematique peut-il etre dispense de rendre publiques ses cotations fermes ?",
+      "ground_truth": "[A VERIFIER] Un internalisateur systematique peut etre dispense lorsque la taille de l'ordre depasse la taille normale de marche, ou dans les cas de derogations et seuils prevus par MiFIR pour les instruments autres que des actions.",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "MiFIR articles 14 a 18",
+      "answerable": true
+    },
+    {
+      "id": "Q005",
+      "category": "unanswerable_trap",
+      "question": "Quel est le montant maximal en euros de l'amende qu'un regulateur national doit imposer pour un premier manquement aux regles de meilleure execution de MiFID II ?",
+      "ground_truth": "The information is unavailable in the current knowledge base.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    }
+  ]
+}
