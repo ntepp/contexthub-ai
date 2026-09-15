@@ -30,3 +30,6 @@ frontend/dist/
 
 # Uploads staging
 uploads/
+
+# Eval harness output
+eval/results/
