@@ -143,6 +143,8 @@ class Document(Base):
         ForeignKey("hub_collections.id", ondelete="CASCADE"), index=True
     )
     filename: Mapped[str] = mapped_column(String(500))
+    # Recognised official reference, e.g. "MiFID II — Directive 2014/65/UE".
+    title: Mapped[str | None] = mapped_column(String(500))
     mime_type: Mapped[str | None] = mapped_column(String(100))
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     sha256: Mapped[str | None] = mapped_column(String(64))

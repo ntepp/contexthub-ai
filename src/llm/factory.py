@@ -116,6 +116,8 @@ class LLMFactory:
                 model=spec.name,
                 base_url=settings.ollama_base_url,
                 temperature=temperature,
+                reasoning=settings.ollama_reasoning,
+                num_ctx=settings.ollama_num_ctx,
                 client_kwargs={"timeout": timeout},
             )
 

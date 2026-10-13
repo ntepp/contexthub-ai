@@ -168,7 +168,9 @@ class PgChunkStore:
             "n": candidates,
             "rrf_k": settings.rrf_k,
             "lang": settings.fts_language,
-            "tsq": " | ".join(terms),
+            # Prefix match on longer words: "définit" (stem "defin") must reach
+            # "Définitions" (stem "definit").
+            "tsq": " | ".join(f"{t}:*" if len(t) >= 5 and not t.isdigit() else t for t in terms),
         }
         lexical_cte = (
             """

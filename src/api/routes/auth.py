@@ -83,6 +83,7 @@ def auth_config() -> dict:
         "oidc_label": settings.oidc_label,
         "app_name": settings.app_name,
         "version": settings.app_version,
+        "source_code_url": settings.source_code_url or None,
     }
 
 

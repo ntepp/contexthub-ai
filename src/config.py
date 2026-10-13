@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     log_format: Literal["text", "json"] = "text"
     # Public URL of the frontend, used for OIDC redirects and CORS.
     public_url: str = "http://localhost:5173"
+    # AGPL-3.0 §13: users interacting over a network must be offered the source. Leave
+    # empty only under a commercial licence.
+    source_code_url: str = "https://github.com/ntepp/contexthub-ai"
     cors_origins: str = ""
 
     # ------------------------------------------------------------------ security
@@ -101,6 +104,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 120
 
     ollama_base_url: str = "http://localhost:11434"
+    # "Thinking" models (qwen3, deepseek-r1…) are ~25x slower with reasoning on, for no
+    # gain on short grounded answers. Off by default; ignored by non-thinking models.
+    ollama_reasoning: bool = False
+    # Ollama silently truncates prompts beyond num_ctx (default 4096): 6 sources of
+    # ~1200 characters plus instructions need headroom.
+    ollama_num_ctx: int = 8192
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     openai_compatible_base_url: str | None = None
@@ -112,10 +121,10 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ retrieval
     retrieval_max_distance: float = 0.75
-    retrieval_top_k: int = 6
-    retrieval_candidates: int = 20
+    retrieval_top_k: int = 8
+    retrieval_candidates: int = 40
     retrieval_hybrid: bool = True
-    fts_language: str = "french"
+    fts_language: str = "fr_unaccent"
     rrf_k: int = 60
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
@@ -135,8 +144,12 @@ class Settings(BaseSettings):
             problems = []
             if self.secret_key == _INSECURE_SECRET or len(self.secret_key) < 32:
                 problems.append("SECRET_KEY must be set to a random value of at least 32 characters")
-            if self.postgres_password == "postgres" and not self.database_url:
-                problems.append("POSTGRES_PASSWORD must not be the default 'postgres'")
+            if self.postgres_password in ("postgres", "change-me") and not self.database_url:
+                problems.append("POSTGRES_PASSWORD must not be a default value")
+            if self.redis_password == "change-me":
+                problems.append("REDIS_PASSWORD must not be a default value")
+            if self.admin_password == "change-me":
+                problems.append("ADMIN_PASSWORD must not be a default value")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self

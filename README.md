@@ -1,338 +1,143 @@
-# ContextHub AI — Enterprise Retrieval Copilot
+# ContextHub AI
 
-> Production-oriented Retrieval Augmented Generation (RAG) platform designed to transform fragmented enterprise documentation into a grounded, auditable conversational knowledge system.
+**Assistant documentaire souverain pour les équipes conformité.** ContextHub répond aux questions
+de vos collaborateurs à partir de vos textes de référence — réglementation, doctrine, procédures
+internes — en citant chaque affirmation à la page et à l'article près. Quand vos documents ne
+permettent pas de répondre, il le dit. Chaque échange est journalisé dans un registre d'audit
+infalsifiable.
 
-![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.11x-009688?logo=fastapi)
-![LangGraph](https://img.shields.io/badge/LangGraph-Orchestration-orange)
-![pgvector](https://img.shields.io/badge/pgvector-PostgreSQL-336791?logo=postgresql)
-![Celery](https://img.shields.io/badge/Celery-Async%20Ingestion-37814A?logo=celery)
-![LangSmith](https://img.shields.io/badge/LangSmith-Observability-purple)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+Il s'installe chez vous. En mode local, aucun contenu ne quitte votre infrastructure.
 
----
-
-## Why This Matters
-
-Enterprise organizations accumulate knowledge across PDFs, internal documents, and web sources — fragmented, unsearchable, and siloed. Staff waste hours finding answers that already exist in documentation.
-
-Generic chatbots hallucinate. Keyword search misses context. ContextHub AI solves this with:
-
-- **Grounded responses** — answers are strictly derived from indexed documents, never invented
-- **Source attribution** — every answer cites the exact document and page number
-- **Confidence scoring** — retrieval quality is quantified per query, not opaque
-- **Async ingestion at scale** — PDFs are processed in the background via a job queue; the API never blocks
-- **Provider independence** — swap between local (Ollama) and cloud (OpenAI) LLMs with a single environment variable
+![Licence AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0%20%2B%20commerciale-1E5B48)
+![Python 3.12](https://img.shields.io/badge/python-3.12-16213A)
+![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-16213A)
 
 ---
 
-## System Architecture
+## Ce que fait ContextHub
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        Client Layer                          │
-│   React Frontend (5173)  │  Streamlit Demo (8501)  │  CLI   │
-└────────────────────────────────┬─────────────────────────────┘
-                                 │
-                   ┌─────────────▼─────────────┐
-                   │     FastAPI Gateway        │
-                   │       Port 8000            │
-                   │  /ask  /upload  /metrics   │
-                   └──────────┬────────────────┘
-                              │
-         ┌────────────────────┼──────────────────┐
-         │                    │                  │
-┌────────▼───────┐  ┌────────▼────────┐  ┌──────▼──────────┐
-│ Celery Worker  │  │    LangGraph    │  │  Redis Cache    │
-│ Async PDF      │  │  Orchestrator   │  │  Source dedup   │
-│ Ingestion      │  │  retrieve →     │  │  Job broker     │
-│ (auto-retry)   │  │  generate       │  └─────────────────┘
-└────────┬───────┘  └────────┬────────┘
-         │                   │
-         │          ┌────────▼────────┐
-         │          │   LLM Factory   │
-         │          │  Ollama/OpenAI  │
-         │          │  (env-switched) │
-         │          └─────────────────┘
-         │
-┌────────▼────────────────────────────────────────────┐
-│              PostgreSQL + pgvector                   │
-│  • bge-m3 vector embeddings (1024 dims)             │
-│  • Collection-scoped similarity search              │
-│  • Document index + ingestion status                │
-└─────────────────────────────────────────────────────┘
-         │
-┌────────▼─────────────┐
-│  LangSmith           │
-│  Trace every run:    │
-│  retrieve + generate │
-│  latency, tokens     │
-└──────────────────────┘
-```
-
----
-
-## Product Preview
-
-### Document Ingestion — Async PDF Upload
-
-![Knowledge Base](docs/screenshots/demo-upload.png)
-
-Upload a PDF and track its ingestion status in real time. The job is processed by a Celery worker in the background — the API returns immediately with a `task_id`. The UI polls until the document status reaches `ready`.
-
----
-
-### Grounded Question Answering
-
-![Q&A Demo](docs/screenshots/demo-ask.png)
-
-Every answer is derived strictly from indexed documents. The sidebar exposes live operational metrics (LLM provider, model, vector store, system status). Each response includes a **Retrieval Confidence** score (`1 - mean cosine distance` of the top-3 retained chunks) and an **End-to-end Latency** measurement.
-
----
-
-### API — Swagger UI
-
-![Swagger UI](docs/screenshots/swagger-ui.png)
-
-Auto-generated interactive API documentation at `http://localhost:8000/docs`. All 10 endpoints are documented with request/response schemas.
-
----
-
-### React Frontend
-
-Full-featured web interface at `http://localhost:5173`:
-- **Knowledge Base** page — drag-and-drop PDF upload, real-time Celery task polling, indexed document list
-- **Chat** page — streaming token-by-token responses via SSE, model selector, collection picker
-
----
-
-## AI Engineering Decisions
-
-These are the deliberate architectural choices made to move beyond a proof-of-concept toward a production-oriented system.
-
-### 1. Asynchronous ingestion via Celery + Redis
-
-PDF processing involves disk I/O, embedding calls (up to 8192 tokens per chunk with bge-m3), and bulk vector writes — easily 20–60 seconds per document. A synchronous endpoint would block the API server thread for every upload.
-
-Celery offloads this to a worker pool. The API returns a `task_id` immediately; clients poll `/tasks/{id}`. This is the same pattern used by cloud ML pipelines (e.g. SageMaker batch transforms, Azure ML endpoints). Workers auto-retry up to 3 times on failure.
-
-### 2. pgvector over a standalone vector database
-
-ChromaDB is excellent for local prototyping but introduces a separate process and persistence layer. pgvector runs inside PostgreSQL — the same database already storing collection metadata and document status. One fewer infra dependency, ACID-compliant writes, and SQL-queryable embeddings for future analytics.
-
-### 3. Provider-agnostic LLM factory
-
-```
-LLM_PROVIDER=ollama   → ChatOllama (llama3.1:8b, fully local, zero API cost)
-LLM_PROVIDER=openai   → ChatOpenAI (gpt-4o, cloud-grade reasoning)
-```
-
-No code change, no redeploy. This matters in production where you might route cost-sensitive queries to a local model and high-stakes queries to a frontier model. The factory pattern also makes adding new providers (Anthropic, Mistral, Vertex) a one-file change.
-
-### 4. LangGraph over a simple LLMChain
-
-LangGraph models the pipeline as a typed state machine with explicit node transitions (`retrieve → generate`). This gives three production advantages over a chain:
-
-- **Debuggability** — LangSmith traces each node individually: inputs, outputs, latency, tokens
-- **Testability** — each node is a plain Python function, unit-testable in isolation
-- **Extensibility** — adding reranking, query expansion, or a guardrails node means adding a new graph node, not refactoring a chain
-
-### 5. Distance threshold over pure top-k retrieval
-
-`similarity_search_with_score` on `langchain-postgres` returns a cosine **distance** per chunk — `0.0` is a perfect match, higher is worse, and results arrive sorted ascending. We discard every chunk above `RETRIEVAL_MAX_DISTANCE` (default `0.75`) rather than always returning the top-k results. When nothing qualifies, `retrieve` short-circuits and the system returns *"The information is unavailable in the current knowledge base."* — without ever invoking the LLM — rather than constructing an answer from loosely related content.
-
-This is the core mechanism behind grounded responses — the system knows what it doesn't know.
-
-> The score direction is the easiest thing to get wrong here: an earlier revision compared it as if it were a similarity, which silently discarded *every* match and made the system answer "information unavailable" to everything.
-
----
-
-## Key Capabilities
-
-| Capability | Implementation |
+| | |
 |---|---|
-| PDF & URL ingestion | `PDFDataLoader`, `WebDataLoader` + `RecursiveCharacterTextSplitter` |
-| Multilingual embeddings | `bge-m3` via Ollama (1024 dims, 8192 token context) |
-| Semantic search | pgvector cosine distance, collection-scoped, thresholded at `RETRIEVAL_MAX_DISTANCE` |
-| Async job queue | Celery + Redis, auto-retry (max 3×) |
-| Streaming answers | Server-Sent Events via `llm.astream()` |
-| Observability | LangSmith traces (retrieve + generate nodes, latency, tokens) |
-| Confidence scoring | `1 - mean(cosine distance)` of the top-3 retained chunks |
-| Chunk quality filtering | Reject chunks < 40% alphabetic or < 20 characters |
-| Source attribution | Document path + page number returned with every answer |
-| LLM switching | `LLM_PROVIDER` env var — no code change |
+| **Réponses citées** | Chaque phrase renvoie à une source numérotée `[n]` : document, page, chemin Titre › Chapitre › Article, extrait. Un clic ouvre le PDF à la bonne page. |
+| **Refus explicite** | Si aucun passage pertinent n'existe, réponse standard de refus, sans même appeler le LLM. Testé : 100 % de refus corrects sur les questions pièges du jeu de référence. |
+| **Textes européens reconnus** | MiFID II, MiFIR, EMIR, DORA, SFDR, MAR, PRIIPs, AIFM, CRR… identifiés automatiquement : une question sur « EMIR » trouve le règlement 648/2012. |
+| **Recherche hybride** | Sémantique (bge-m3, multilingue) et plein texte français sans accents, fusionnées ; découpage qui respecte les articles. |
+| **Journal d'audit** | Questions, réponses, sources, consultations, imports, droits : tout est tracé, chaîné par SHA-256, vérifiable et exportable en CSV. |
+| **Accès maîtrisés** | SSO OpenID Connect (Entra ID, Google, Okta, Keycloak) ou comptes locaux, droits par collection, clés d'API. |
+| **RGPD** | Suppression de documents, de collections et d'utilisateurs ; durées de conservation ; effacement des données personnelles du journal sans casser son intégrité. |
+| **Fournisseur de LLM au choix** | Ollama en local par défaut ; Anthropic, OpenAI, Mistral ou tout endpoint compatible OpenAI si vous l'autorisez. L'interface signale en permanence quand un modèle cloud est utilisé. |
+| **Qualité mesurée** | Banc d'évaluation livré avec un jeu de référence MiFID / MiFIR / EMIR ; à rejouer sur votre propre corpus. |
 
----
+## Architecture
 
-## Getting Started
+```
+ Navigateur ──▶ nginx ──▶ API FastAPI ──▶ PostgreSQL + pgvector  (comptes, droits, audit, passages indexés)
+                 │           │      └──▶ Redis                   (file d'attente, limites de débit)
+                 │           │      └──▶ LangGraph : reformulation → recherche hybride → génération citée
+                 │           └──▶ Worker Celery : PDF/DOCX/HTML/TXT → OCR → découpage par article → embeddings
+                 └ seul service exposé            └──▶ Ollama (local)  ou  fournisseur cloud autorisé
+```
 
-### Prerequisites
+| Module | Rôle |
+|---|---|
+| `src/api/` | Routes, authentification, contrôle d'accès par collection |
+| `src/auth/` | Mots de passe, sessions, OIDC, clés d'API, limitation de débit |
+| `src/audit/` | Journal chaîné, vérification, export, effacement RGPD |
+| `src/ingestion/` | Formats, OCR, reconnaissance des actes européens, découpage structuré, import d'URL sécurisé |
+| `src/retrieval/` | Stockage pgvector, recherche hybride RRF, re-classement optionnel |
+| `src/rag/` | Graphe LangGraph `condense → retrieve → generate`, citations, refus |
+| `src/llm/` | Fournisseurs et liste blanche des modèles |
+| `eval/` | Banc d'évaluation et jeu de référence |
+| `frontend/` | Interface React (français) |
 
-- Python 3.11+
-- Docker (Redis + PostgreSQL via `docker-compose`)
-- [Ollama](https://ollama.com/) — if using local LLMs
-- Node.js 18+ — for the React frontend
+## Démarrage
 
-### Installation
+### Production (chez un client)
 
 ```bash
-# 1. Clone
-git clone <your_repo_url>
-cd contexthub-ai
+cp .env.production.example .env        # remplacer chaque « change-me »
+docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml --profile ollama up -d --build
+docker compose exec ollama ollama pull bge-m3 && docker compose exec ollama ollama pull llama3.1:8b
+```
 
-# 2. Python environment
-python -m venv venv
-source venv/bin/activate      # Linux/macOS
-venv\Scripts\activate         # Windows
+Guide complet : [docs/deployment.md](docs/deployment.md) · sécurité et flux de données :
+[docs/security.md](docs/security.md).
 
-# 3. Dependencies
-pip install -r requirements.txt
-cd frontend && npm install && cd ..
+### Développement
 
-# 4. Ollama models (if using local LLMs)
-ollama pull llama3.1:8b
-ollama pull bge-m3
-
-# 5. Environment
+```bash
+python -m venv venv && venv\Scripts\activate          # source venv/bin/activate sous Linux/macOS
+pip install -r requirements-dev.txt
+cd frontend && npm ci && cd ..
 cp .env.example .env
-# Edit .env with your values
+ollama pull bge-m3 && ollama pull llama3.1:8b
+start.bat                                              # ou ./start.sh : PostgreSQL, Redis, migrations, API, worker, interface
 ```
 
-### Start (recommended)
+Interface : http://localhost:5173 (compte défini par `ADMIN_EMAIL` / `ADMIN_PASSWORD`) ·
+API : http://localhost:8000/docs.
 
-**Windows:**
-```bat
-start.bat
-```
-
-**Linux / macOS:**
-```bash
-chmod +x start.sh && ./start.sh
-```
-
-The script starts Docker services, runs Alembic migrations, launches the Celery worker, FastAPI backend, and React dev server.
-
-### Manual start
+## Tests et qualité
 
 ```bash
-docker-compose up -d                              # Redis + PostgreSQL
-alembic upgrade head                              # DB migrations (first run)
-celery -A src.workers.celery_app worker --loglevel=info  # Async worker
-uvicorn src.app:app --reload                      # API (port 8000)
-cd frontend && npm run dev                        # UI (port 5173)
-streamlit run demo_ui.py                          # Demo UI (port 8501)
+ruff check src eval tests
+pytest                                                 # SQLite, sans service externe
+TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest   # + PostgreSQL réel
+cd frontend && npm run build
+python -m eval.run_eval --collection mifid             # banc d'évaluation (LLM et corpus réels)
 ```
 
----
+Résultats d'évaluation et méthode : [docs/evaluation.md](docs/evaluation.md).
 
-## API Reference
+## API
 
-| Method | Path | Description |
+Toutes les routes métier exigent une session (cookie) ou une clé d'API
+(`Authorization: Bearer chk_…`).
+
+| Méthode | Route | |
 |---|---|---|
-| `GET` | `/collections` | List all collections |
-| `POST` | `/collections` | Create a collection `{ name, description? }` |
-| `POST` | `/upload?collection=<name>` | Upload PDF (async) → `{ task_id }` |
-| `GET` | `/tasks/{id}` | Poll Celery task status |
-| `POST` | `/load` | Synchronous load `{ source, collection }` |
-| `GET` | `/documents?collection=<name>` | List indexed documents with status |
-| `POST` | `/ask` | Q&A → `{ answer, sources, confidence_metric, latency_seconds }` |
-| `POST` | `/ask/stream` | Streaming Q&A via Server-Sent Events |
-| `GET` | `/models` | Available LLM models (embedding models excluded) |
-| `GET` | `/metrics` | Operational system snapshot |
+| `POST` | `/auth/login`, `/auth/logout` | Connexion par mot de passe |
+| `GET` | `/auth/oidc/login` | Connexion SSO |
+| `GET` | `/collections` | Collections accessibles |
+| `POST` | `/collections/{id}/documents` | Importer un document (asynchrone) |
+| `DELETE` | `/documents/{id}` | Supprimer un document |
+| `GET` | `/documents/{id}/file` | Fichier original |
+| `POST` | `/chat/ask` | Question → réponse, sources, conversation |
+| `POST` | `/chat/stream` | Idem en streaming (Server-Sent Events) |
+| `GET` | `/conversations` | Historique |
+| `GET` | `/admin/audit`, `/admin/audit/export.csv`, `/admin/audit/verify` | Journal d'audit |
+| `GET` | `/health`, `/ready`, `/metrics` | Supervision |
 
-**Example — grounded Q&A:**
-```http
-POST /ask
-{ "question": "What are the eligibility criteria?", "collection": "HR-Policy-2024" }
+Exemple :
 
-→ {
-    "answer": "Employees are eligible after 6 months of continuous service...",
-    "sources": [
-      { "source": "uploads/hr-policy.pdf", "page": 12 }
-    ],
-    "confidence_metric": 0.847,
-    "latency_seconds": 2.31
-  }
+```bash
+curl -X POST https://contexthub.client.fr/api/chat/ask \
+  -H "Authorization: Bearer chk_..." -H "Content-Type: application/json" \
+  -d '{"question": "Quand la directive MiFID II est-elle applicable ?"}'
 ```
 
----
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your values:
-
-| Variable | Description | Default |
-|---|---|---|
-| `LLM_PROVIDER` | `ollama` or `openai` | `ollama` |
-| `LLM_MODEL_NAME` | Model name for the chosen provider | *(required)* |
-| `OPENAI_API_KEY` | Required only when `LLM_PROVIDER=openai` | — |
-| `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
-| `POSTGRES_HOST` | PostgreSQL hostname | `localhost` |
-| `POSTGRES_PORT` | PostgreSQL port | `5432` |
-| `POSTGRES_USER` | PostgreSQL user | `postgres` |
-| `POSTGRES_PASSWORD` | PostgreSQL password | `postgres` |
-| `POSTGRES_DB` | Database name | `contexthub` |
-| `REDIS_HOST` | Redis hostname | `localhost` |
-| `REDIS_PORT` | Redis port | `6379` |
-| `RETRIEVAL_MAX_DISTANCE` | Max cosine distance for a chunk to be retained (lower = stricter) | `0.75` |
-| `RETRIEVAL_TOP_K` | Candidate chunks pulled from pgvector before the distance filter | `4` |
-| `NO_ANSWER_TEXT` | Refusal sentence; must match the corpus language | *(French default)* |
-| `LOG_LEVEL` | Backend log verbosity | `INFO` |
-| `LANGSMITH_API_KEY` | LangSmith API key for tracing | *(optional)* |
-| `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing | `false` |
-| `LANGCHAIN_PROJECT` | LangSmith project name | `contexthub-ai` |
-
----
-
-## Project Structure
-
-```
-contexthub-ai/
-├── src/
-│   ├── rag/               # LangGraph pipeline: retrieve → generate
-│   ├── llm/               # LLMFactory: Ollama / OpenAI abstraction
-│   ├── vector_store/      # pgvector (default), ChromaDB (legacy), in-memory
-│   ├── data_loading/      # PDF + web loaders, text splitter + quality filter
-│   ├── cache/             # Redis-backed source deduplication
-│   ├── db/                # SQLAlchemy models, session, migrations
-│   ├── workers/           # Celery app + ingest_document task (auto-retry)
-│   ├── app.py             # FastAPI application — all endpoints
-│   └── main.py            # Interactive CLI
-│
-├── frontend/              # React + Vite + TypeScript + TailwindCSS
-│   └── src/
-│       ├── components/    # Chat, KnowledgeBase, Sidebar
-│       ├── pages/         # Chat.tsx, KnowledgeBase.tsx
-│       └── lib/           # api.ts (all backend calls proxied via /api)
-│
-├── alembic/               # Database migrations
-├── demo_ui.py             # Streamlit demo (upload + Q&A + metrics sidebar)
-├── docker-compose.yaml    # Redis + PostgreSQL (pgvector)
-├── start.bat / start.sh   # One-command startup
-├── stop.bat / stop.sh     # One-command shutdown
-├── .env.example           # Environment template
-└── requirements.txt
+```json
+{
+  "answer": "Les États membres appliquent ces dispositions à partir du 3 janvier 2017 [1].",
+  "sources": [{"index": 1, "filename": "CELEX_32014L0065_FR.pdf", "page": 131,
+               "section_path": ["MiFID II — Directive 2014/65/UE", "Titre VII", "Article 93 — Transposition"],
+               "cited": true}],
+  "refused": false,
+  "conversation_id": "…"
+}
 ```
 
----
+## Documentation
 
-## Production Roadmap
+- [PRD — produit, cible, périmètre, suivi](docs/PRD.md)
+- [Installation et exploitation](docs/deployment.md)
+- [Sécurité et flux de données](docs/security.md)
+- [Évaluation de la qualité](docs/evaluation.md)
+- [Incidents et retours d'expérience](docs/incidents.md)
 
-This project is intentionally designed to be deployable beyond localhost. The path to production involves:
+## Licence
 
-- **Containerization** — Dockerfile per service (API, worker, frontend); Docker Compose v2 for orchestration
-- **Horizontal scaling** — Celery workers scale independently behind the job queue; pgvector handles concurrent reads
-- **Reranking** — Cross-encoder reranking layer between `retrieve` and `generate` to improve precision on long documents
-- **Query expansion** — HyDE (Hypothetical Document Embeddings) or multi-query retrieval for sparse or ambiguous questions
-- **Authentication** — OAuth2 / API key middleware on FastAPI routes
-- **Monitoring** — Prometheus metrics endpoint + Grafana dashboard (latency, cache hit rate, embedding throughput)
-- **Fine-tuned embeddings** — Domain-specific embedding model fine-tuned on enterprise document corpus
-- **Multi-tenancy** — Collection-level RBAC; tenant isolation at the pgvector collection layer
-
----
-
-## License
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-MIT License — contributions welcome.
+Double licence : [AGPL-3.0](LICENSE) pour l'édition communautaire, licence commerciale pour les
+clients qui ne souhaitent pas en appliquer les obligations et veulent le support éditeur. Voir
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md). Les versions antérieures à la v1.0 restent sous
+licence MIT.

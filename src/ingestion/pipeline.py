@@ -16,6 +16,7 @@ from src.db.models import DOC_FAILED, DOC_PROCESSING, DOC_READY, Document, utcno
 from src.db.session import session_scope
 from src.ingestion import storage
 from src.ingestion.chunking import chunk_pages
+from src.ingestion.eu_acts import detect_act
 from src.ingestion.filetypes import IngestionError, sniff
 from src.ingestion.loaders import load_file
 from src.ingestion.url_fetch import fetch_url
@@ -88,7 +89,10 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         sniff(path, mime)
 
     loaded = load_file(path, mime)
-    chunks = chunk_pages(loaded.pages, settings.chunk_size, settings.chunk_overlap)
+    act = detect_act(loaded.pages[0].text) if loaded.pages else None
+    if act is not None:
+        log.info("[ingestion] texte reconnu : %s", act.label)
+    chunks = chunk_pages(loaded.pages, settings.chunk_size, settings.chunk_overlap, act.label if act else None)
     if not chunks:
         raise IngestionError(
             "Aucun texte exploitable dans ce document"
@@ -96,7 +100,13 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         )
 
     total = len(chunks)
-    _update(document_id, progress_total=total, page_count=loaded.page_count, warnings=loaded.warnings or None)
+    _update(
+        document_id,
+        progress_total=total,
+        page_count=loaded.page_count,
+        warnings=loaded.warnings or None,
+        title=act.label if act else None,
+    )
     log.info("[ingestion] %s : %d chunks à indexer par lots de %d", doc.filename, total, settings.embed_batch_size)
 
     embeddings = get_embeddings()
@@ -113,6 +123,7 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
                     content=chunk.content,
                     metadata={
                         "filename": doc.filename,
+                        "doc_title": act.label if act else None,
                         "page": chunk.page,
                         "section": chunk.section,
                         "section_path": chunk.section_path,

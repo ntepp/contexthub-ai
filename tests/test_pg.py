@@ -24,8 +24,9 @@ pytestmark = [pytest.mark.pg, pytest.mark.skipif(not PG_URL, reason="TEST_DATABA
 
 @pytest.fixture(scope="module")
 def migrated():
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     engine = create_engine(PG_URL)
     with engine.begin() as conn:

@@ -1,39 +1,88 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/source-serif-4/400.css';
+@import '@fontsource/source-serif-4/600.css';
+@import '@fontsource/source-serif-4/400-italic.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
-
   html,
   body,
   #root {
     height: 100%;
-    margin: 0;
-    padding: 0;
   }
 
   body {
-    background-color: #09090b;
-    color: #fafafa;
-    font-family: 'Inter', system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
+    @apply bg-paper text-ink font-sans antialiased;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  :focus-visible {
+    outline: 2px solid #1e5b48;
+    outline-offset: 2px;
   }
-  ::-webkit-scrollbar-track {
-    background: transparent;
+
+  ::selection {
+    background: #e4efea;
   }
-  ::-webkit-scrollbar-thumb {
-    background: #3f3f46;
-    border-radius: 3px;
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #52525b;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ledger text-white hover:bg-ledger-dark;
+  }
+  .btn-secondary {
+    @apply btn border border-rule bg-surface text-ink hover:bg-wash;
+  }
+  .btn-ghost {
+    @apply btn text-slate hover:bg-wash hover:text-ink;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:opacity-90;
+  }
+  .input {
+    @apply w-full rounded-md border border-rule bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-ledger focus:outline-none;
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium text-ink;
+  }
+  .table-head {
+    @apply border-b border-rule px-3 py-2 text-left text-xs font-medium text-slate;
+  }
+  .table-cell {
+    @apply border-b border-rule px-3 py-2.5 text-sm align-top;
+  }
+  .answer {
+    @apply font-serif text-answer text-ink;
+  }
+  .answer p {
+    @apply mb-3 last:mb-0;
+  }
+  .answer ul {
+    @apply mb-3 list-disc pl-5;
+  }
+  .answer ol {
+    @apply mb-3 list-decimal pl-5;
+  }
+  .answer li {
+    @apply mb-1;
+  }
+  .answer strong {
+    @apply font-semibold;
   }
 }

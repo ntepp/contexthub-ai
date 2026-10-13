@@ -1,0 +1,14 @@
+.git
+.env
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+uploads
+backups
+eval/results
+frontend/node_modules
+frontend/dist
+docs/screenshots
+*.dump

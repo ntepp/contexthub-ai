@@ -30,11 +30,26 @@ def _now():
 
 def upgrade() -> None:
     embedding_dim = int(os.getenv("EMBEDDING_DIM", "1024"))
-    fts_language = os.getenv("FTS_LANGUAGE", "french")
+    fts_language = os.getenv("FTS_LANGUAGE", "fr_unaccent")
     if not fts_language.isidentifier():
         raise ValueError(f"Invalid FTS_LANGUAGE: {fts_language!r}")
 
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # French stemming that ignores accents: users type "financiere", texts say
+    # "financière"; both must meet in the full-text index.
+    op.execute("CREATE EXTENSION IF NOT EXISTS unaccent")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'fr_unaccent') THEN
+                CREATE TEXT SEARCH CONFIGURATION fr_unaccent (COPY = french);
+                ALTER TEXT SEARCH CONFIGURATION fr_unaccent
+                    ALTER MAPPING FOR hword, hword_part, word WITH unaccent, french_stem;
+            END IF;
+        END $$;
+        """
+    )
 
     # ------------------------------------------------------------------ users
     op.create_table(
@@ -121,6 +136,7 @@ def upgrade() -> None:
     op.drop_column("hub_documents", "collection_name")
 
     new_doc_columns = [
+        sa.Column("title", sa.String(500)),
         sa.Column("mime_type", sa.String(100)),
         sa.Column("size_bytes", sa.BigInteger(), nullable=False, server_default="0"),
         sa.Column("sha256", sa.String(64)),
@@ -245,6 +261,7 @@ def downgrade() -> None:
         "sha256",
         "size_bytes",
         "mime_type",
+        "title",
     ):
         op.drop_column("hub_documents", name)
     op.add_column("hub_documents", sa.Column("collection_name", sa.String(255)))

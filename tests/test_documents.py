@@ -87,8 +87,8 @@ def test_upload_validation(admin, collection, monkeypatch):
 def test_docx_txt_md_html_are_supported(admin, collection, store):
     files = [
         ("politique.docx", _docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        ("note.txt", "Note interne sur la gestion des conflits d interets du groupe.".encode(), "text/plain"),
-        ("guide.md", "# Guide\n\nProcedure d escalade des alertes de conformite.".encode(), "text/markdown"),
+        ("note.txt", b"Note interne sur la gestion des conflits d interets du groupe.", "text/plain"),
+        ("guide.md", b"# Guide\n\nProcedure d escalade des alertes de conformite.", "text/markdown"),
         ("page.html", b"<html><body><h2>FAQ</h2><p>Les reclamations clients sont traitees sous dix jours.</p>"
                       b"<script>alert(1)</script></body></html>", "text/html"),
     ]

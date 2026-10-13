@@ -2,7 +2,7 @@
 setlocal
 
 echo [1/5] Starting Docker services (Redis + PostgreSQL)...
-docker-compose up -d
+docker compose -f docker-compose.dev.yaml up -d
 if errorlevel 1 ( echo ERROR: docker-compose failed & pause & exit /b 1 )
 
 echo [2/5] Waiting for PostgreSQL to be ready...

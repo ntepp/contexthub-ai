@@ -124,7 +124,10 @@ def _sections(pages: list[PageText]) -> list[_Section]:
     return sections
 
 
-def chunk_pages(pages: list[PageText], chunk_size: int = 1200, chunk_overlap: int = 150) -> list[Chunk]:
+def chunk_pages(
+    pages: list[PageText], chunk_size: int = 1200, chunk_overlap: int = 150, doc_label: str | None = None
+) -> list[Chunk]:
+    """``doc_label`` (e.g. "MiFID II — Directive 2014/65/UE") heads every chunk's path."""
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks: list[Chunk] = []
     for section in _sections(pages):
@@ -150,7 +153,7 @@ def chunk_pages(pages: list[PageText], chunk_size: int = 1200, chunk_overlap: in
             if not is_meaningful(piece):
                 continue
             page = page_numbers[max(0, bisect.bisect_right(offsets, position) - 1)]
-            header = " › ".join(section.path)
+            header = " › ".join(([doc_label] if doc_label else []) + section.path)
             content = f"[{header}]\n{piece}" if header else piece
             chunks.append(
                 Chunk(

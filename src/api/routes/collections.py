@@ -65,6 +65,7 @@ def serialize_document(doc: Document) -> dict:
         "id": str(doc.id),
         "collection_id": str(doc.collection_id),
         "filename": doc.filename,
+        "title": doc.title,
         "mime_type": doc.mime_type,
         "size_bytes": doc.size_bytes,
         "source_url": doc.source_url,

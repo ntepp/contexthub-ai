@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import httpx
@@ -331,15 +332,18 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
         "messages": db.execute(select(func.count()).select_from(Message)).scalar_one(),
     }
     uses_ollama = settings.embedding_provider == "ollama" or any(m.provider.value == "ollama" for m in model_catalogue())
+    probes = {"redis": _check_redis, "workers": _check_workers, "ocr": ocr_available}
+    if uses_ollama:
+        probes["ollama"] = _check_ollama
+    # Each probe may wait on a timeout: run them side by side, not one after another.
+    with ThreadPoolExecutor(max_workers=len(probes)) as pool:
+        futures = {name: pool.submit(fn) for name, fn in probes.items()}
+        results = {name: future.result() for name, future in futures.items()}
+    ocr_ok = results.pop("ocr")
     return {
         "version": settings.app_version,
         "environment": settings.environment,
-        "checks": {
-            "database": _check_db(db),
-            "redis": _check_redis(),
-            "workers": _check_workers(),
-            **({"ollama": _check_ollama()} if uses_ollama else {}),
-        },
+        "checks": {"database": _check_db(db), **results},
         "counts": counts,
         "configuration": {
             "models": [m.as_dict() for m in model_catalogue()],
@@ -351,7 +355,7 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
                 "hybrid": settings.retrieval_hybrid,
                 "reranker": settings.reranker,
             },
-            "ocr": {"enabled": settings.ocr_enabled, "available": ocr_available()},
+            "ocr": {"enabled": settings.ocr_enabled, "available": ocr_ok},
             "url_ingestion": settings.allow_url_ingestion,
             "sso": settings.oidc_enabled,
             "retention_days": {
