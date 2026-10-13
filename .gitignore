@@ -33,3 +33,9 @@ uploads/
 
 # Eval harness output
 eval/results/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+*.dump
+backups/

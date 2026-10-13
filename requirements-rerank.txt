@@ -1,0 +1,3 @@
+# Optional: local cross-encoder re-ranking (RERANKER=cross_encoder). Pulls in PyTorch (~2 GB).
+-r requirements.txt
+sentence-transformers>=3.0,<6

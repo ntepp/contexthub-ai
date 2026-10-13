@@ -1,247 +1,370 @@
-import json
-import os
+"""Grounded question answering: condense → retrieve → generate (LangGraph).
+
+* ``condense`` rewrites a follow-up question into a standalone one using the
+  conversation history (skipped on the first turn). History is used **only** for this
+  rewrite: the answer itself is generated from the retrieved sources alone.
+* ``retrieve`` runs hybrid search, keeps chunks whose cosine **distance** is
+  ``<= RETRIEVAL_MAX_DISTANCE`` (0.0 = identical, higher = worse) and short-circuits
+  to the refusal sentence — without calling the LLM — when nothing qualifies.
+* ``generate`` answers from numbered sources and must cite them as ``[n]``. A
+  refusal from the LLM is normalised to the exact ``NO_ANSWER_TEXT`` sentence and
+  drops the sources, so the UI never shows citations for a non-answer.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
 import time
-from typing import AsyncGenerator
+import uuid
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
-from langchain_core.documents import Document
-from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, StateGraph
-from typing_extensions import List, TypedDict
+from typing_extensions import TypedDict
 
-from src.cache.factory import cache_url, get_redis_client, is_url_cached
-from src.data_loading.pdf_loader import PDFDataLoader
-from src.data_loading.text_splitter import split_text
-from src.data_loading.webpage_loader import WebDataLoader
+from src.config import get_settings
+from src.llm.factory import ModelSpec, resolve_model
 from src.llm.llm_chain import initialize_model_llm
+from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
+from src.retrieval.embeddings import get_embeddings
+from src.retrieval.rerank import rerank
+from src.retrieval.store import RetrievedChunk, get_store
 from src.utils.logging_config import get_logger
-from src.utils.source_type import determine_source_type
-from src.vector_store.embeddings import initialize_embeddings
-from src.vector_store.factory import VectorStoreType, create_vector_store
-from src.vector_store.pgvector import PGVectorConfig
 
 log = get_logger()
 
-embeddings = initialize_embeddings()
-
-# langchain-postgres returns a cosine DISTANCE, not a similarity: 0.0 means
-# identical, higher means less relevant, and results arrive sorted ascending.
-# Chunks strictly above this distance are discarded.
-MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.75"))
-
-# Number of candidate chunks pulled from pgvector before the distance filter is
-# applied. This used to be langchain-postgres' implicit default of 4, which caps
-# how much the distance threshold can ever do: on a question needing passages
-# from two documents, 4 candidates is the binding constraint, not the threshold.
-TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "4"))
-
-# Emitted verbatim in two places: by `retrieve` when nothing clears the distance
-# threshold, and by the LLM itself (injected into the prompt) when the retrieved
-# context does not support an answer. Both paths must produce the exact same
-# string — the evaluation harness matches on it, and the UI relies on it.
-# It MUST be written in the language of the indexed corpus.
-NO_ANSWER = os.getenv(
-    "NO_ANSWER_TEXT",
-    "L'information n'est pas disponible dans la base de connaissances actuelle.",
-)
-
-template = """You are an enterprise knowledge assistant.
+SYSTEM_PROMPT = """You are a compliance knowledge assistant for a regulated financial institution.
+You answer questions using ONLY the numbered sources provided by the user message.
 
 Rules, in order of precedence:
-1. If the context does not explicitly support an answer, reply with exactly the
-   following sentence, alone, with nothing before or after it — no preamble, no
-   confidence level:
+1. If the sources do not explicitly support an answer, reply with exactly the following
+   sentence, alone, with nothing before or after it:
    {no_answer}
-2. Otherwise, answer only from the provided context, never from prior knowledge.
-3. Always write your answer in the same language as the question.
-4. Keep it concise, factual and professional, and end with a confidence level:
-   High, Medium or Low.
+2. Use only the sources, never prior knowledge. Do not speculate or extrapolate.
+3. After each statement, cite the supporting source numbers in square brackets, e.g. [1] or [2][3].
+4. Always answer in the same language as the question.
+5. Be concise, factual and precise. Quote article and paragraph numbers when the sources give them."""
 
-Context:
-{context}
+CONDENSE_PROMPT = """Rewrite the follow-up question so that it can be understood without the conversation.
+Keep the language of the follow-up question. Output only the rewritten question, nothing else.
 
-Question:
-{question}
+Conversation:
+{history}
 
-Professional Answer:"""
-prompt = PromptTemplate.from_template(template)
+Follow-up question: {question}
+Standalone question:"""
+
+_CITATION_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
 
 
-class State(TypedDict):
+def no_answer_text() -> str:
+    return get_settings().no_answer_text
+
+
+class State(TypedDict, total=False):
     question: str
-    context: List[Document]
-    answer: str
-    sources: List[dict]
-    collection: str
+    history: list[tuple[str, str]]
+    collection_ids: list[str]
+    model_id: str
+    standalone_question: str
+    context: list[RetrievedChunk]
+    answer: str | None
+    sources: list[dict]
     confidence_metric: float
+    refused: bool
 
 
-def _get_vector_store(collection: str = "default"):
-    config = PGVectorConfig(collection_name=collection)
-    return create_vector_store(embeddings, store_type=VectorStoreType.PGVECTOR, config=config)
+@dataclass
+class RAGResult:
+    answer: str
+    sources: list[dict]
+    confidence_metric: float
+    refused: bool
+    latency_seconds: float
+    model: str
+    standalone_question: str
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        data = asdict(self)
+        data.pop("extra")
+        return data
 
 
-def _build_graph():
-    graph_builder = StateGraph(State).add_sequence([retrieve, generate])
-    graph_builder.add_edge(START, "retrieve")
-    return graph_builder.compile()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def retrieve(state: State):
-    collection = state.get("collection", "default")
-    vector_store = _get_vector_store(collection)
-    results = vector_store.similarity_search_with_score(state["question"], k=TOP_K)
-    kept = [(doc, dist) for doc, dist in results if dist <= MAX_DISTANCE]
+def _normalise(text: str) -> str:
+    return " ".join(text.replace("’", "'").split()).strip().strip('"«» ').lower()
 
-    log.info("[retrieve] collection=%s question=%r", collection, state["question"])
+
+def is_refusal(answer: str) -> bool:
+    target = _normalise(no_answer_text())
+    got = _normalise(answer)
+    if not got:
+        return True
+    return got == target or (target in got and len(got) <= len(target) + 80)
+
+
+def cited_indices(answer: str) -> set[int]:
+    found: set[int] = set()
+    for group in _CITATION_RE.findall(answer):
+        for number in re.split(r"[,;]", group):
+            if number.strip().isdigit():
+                found.add(int(number))
+    return found
+
+
+def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
+    sources = []
+    for index, chunk in enumerate(chunks, start=1):
+        meta = chunk.metadata or {}
+        body = chunk.content.split("\n", 1)[1] if chunk.content.startswith("[") and "\n" in chunk.content else chunk.content
+        sources.append(
+            {
+                "index": index,
+                "document_id": str(chunk.document_id),
+                "collection_id": str(chunk.collection_id),
+                "filename": meta.get("filename", "document"),
+                "page": meta.get("page"),
+                "section": meta.get("section"),
+                "section_path": meta.get("section_path") or [],
+                "snippet": body[:600],
+                "distance": round(chunk.distance, 4),
+                "cited": False,
+            }
+        )
+    return sources
+
+
+def format_sources(chunks: Sequence[RetrievedChunk]) -> str:
+    blocks = []
+    for index, chunk in enumerate(chunks, start=1):
+        meta = chunk.metadata or {}
+        header = [meta.get("filename", "document")]
+        if meta.get("page"):
+            header.append(f"p. {meta['page']}")
+        blocks.append(f"[{index}] {' — '.join(header)}\n{chunk.content}")
+    return "\n\n".join(blocks)
+
+
+def confidence_from(chunks: Sequence[RetrievedChunk]) -> float:
+    # Cosine distance runs to 2.0, so 1 - mean(distance) can go negative once
+    # MAX_DISTANCE is raised above 1.0. Clamped: a negative score is meaningless.
+    best = sorted(c.distance for c in chunks)[:3]
+    if not best:
+        return 0.0
+    return round(max(0.0, 1.0 - sum(best) / len(best)), 3)
+
+
+def _spec(state: State) -> ModelSpec:
+    return resolve_model(state.get("model_id"))
+
+
+# ---------------------------------------------------------------------------
+# Graph nodes
+# ---------------------------------------------------------------------------
+
+
+async def condense(state: State) -> dict:
+    history = state.get("history") or []
+    question = state["question"]
+    if not history:
+        return {"standalone_question": question}
+    turns = history[-2 * get_settings().history_turns :]
+    transcript = "\n".join(
+        f"{'User' if role == 'user' else 'Assistant'}: {content[:1500]}" for role, content in turns
+    )
+    llm = initialize_model_llm(_spec(state))
+    response = await llm.ainvoke([HumanMessage(CONDENSE_PROMPT.format(history=transcript, question=question))])
+    rewritten = (response.content if isinstance(response.content, str) else str(response.content)).strip()
+    rewritten = rewritten.splitlines()[0].strip() if rewritten else ""
+    log.info("[condense] %r -> %r", question, rewritten)
+    return {"standalone_question": rewritten or question}
+
+
+async def retrieve(state: State) -> dict:
+    settings = get_settings()
+    query = state.get("standalone_question") or state["question"]
+    collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
+
+    vector = await asyncio.to_thread(get_embeddings().embed_query, query)
+    results = await asyncio.to_thread(
+        get_store().search,
+        query,
+        vector,
+        collection_ids,
+        settings.retrieval_candidates,
+        settings.retrieval_hybrid,
+    )
+    kept = [r for r in results if r.distance <= settings.retrieval_max_distance]
+    kept = (await asyncio.to_thread(rerank, query, kept))[: settings.retrieval_top_k]
+    RAG_RETAINED_CHUNKS.observe(len(kept))
+
     log.info(
-        "[retrieve] %d/%d chunks retenus (top_k=%d, max_distance=%.2f) — distances: %s",
+        "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
         len(kept),
         len(results),
-        TOP_K,
-        MAX_DISTANCE,
-        ", ".join(f"{d:.3f}" for _, d in results) or "aucun resultat",
+        settings.retrieval_top_k,
+        settings.retrieval_max_distance,
+        settings.retrieval_hybrid,
+        ", ".join(f"{r.distance:.3f}" for r in results[:10]) or "aucun resultat",
     )
-    for doc, dist in kept[:3]:
-        log.info(
-            "[retrieve]   d=%.3f | %s p.%s | %s",
-            dist,
-            doc.metadata.get("source", "?"),
-            doc.metadata.get("page", "?"),
-            doc.page_content[:150].replace("\n", " "),
-        )
 
     if not kept:
         log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
             "context": [],
-            "answer": NO_ANSWER,
+            "answer": no_answer_text(),
             "sources": [],
             "confidence_metric": 0.0,
+            "refused": True,
         }
-
-    # Cosine distance runs to 2.0, so 1 - mean(distance) can go negative once
-    # MAX_DISTANCE is raised above 1.0. Clamped: a negative "confidence" is
-    # meaningless to the UI and to the report.
-    top_distances = [dist for _, dist in kept[:3]]
-    confidence = round(max(0.0, 1.0 - sum(top_distances) / len(top_distances)), 3)
-
-    sources = [
-        {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
-        for doc, _ in kept
-    ]
     return {
-        "context": [doc for doc, _ in kept],
+        "context": kept,
         "answer": None,
-        "sources": sources,
-        "confidence_metric": confidence,
+        "sources": build_sources(kept),
+        "confidence_metric": confidence_from(kept),
+        "refused": False,
     }
 
 
-async def generate(state: State):
+async def generate(state: State) -> dict:
     if state.get("answer"):
         return {"answer": state["answer"]}
-    docs_content = "\n\n".join(doc.page_content for doc in state["context"])
-    messages = prompt.invoke(
-        {"question": state["question"], "context": docs_content, "no_answer": NO_ANSWER}
-    )
-    llm = initialize_model_llm()
-
-    log.info(
-        "[generate] model=%s provider=%s | contexte: %d chunks, %d caracteres",
-        os.getenv("LLM_MODEL_NAME", "?"),
-        os.getenv("LLM_PROVIDER", "ollama"),
-        len(state["context"]),
-        len(docs_content),
-    )
-
-    start = time.time()
-    full_response = ""
-    chunk_count = 0
+    spec = _spec(state)
+    messages = [
+        SystemMessage(SYSTEM_PROMPT.format(no_answer=no_answer_text())),
+        HumanMessage(f"Sources:\n\n{format_sources(state['context'])}\n\nQuestion: {state['question']}"),
+    ]
+    llm = initialize_model_llm(spec)
+    started = time.time()
+    full = ""
     async for chunk in llm.astream(messages):
-        full_response += chunk.content
-        chunk_count += 1
+        content = chunk.content if isinstance(chunk.content, str) else "".join(
+            part.get("text", "") for part in chunk.content if isinstance(part, dict)
+        )
+        full += content
+    log.info("[generate] model=%s — %d caracteres en %.2fs", spec.id, len(full), time.time() - started)
 
-    elapsed = time.time() - start
-    log.info("[generate] %d chunks recus en %.2fs (%d caracteres)", chunk_count, elapsed, len(full_response))
-    if not full_response.strip():
-        log.error("[generate] le modele n'a renvoye AUCUN contenu — reponse vide cote UI")
-    else:
-        log.info("[generate] reponse: %s", full_response)
+    if is_refusal(full):
+        return {"answer": no_answer_text(), "sources": [], "refused": True}
 
-    return {"answer": full_response}
-
-
-def load_source(source: str, collection: str = "default") -> None:
-    client = get_redis_client()
-    cache_key = f"{collection}:{source}"
-
-    if not is_url_cached(client, cache_key):
-        source_type = determine_source_type(source)
-        if source_type == "unknown":
-            print(f"Source '{source}' is not a valid URL or PDF path.")
-            return
-        loader = PDFDataLoader(source) if source_type == "pdf" else WebDataLoader(url=source)
-        docs = loader.load()
-        all_splits = split_text(docs)
-
-        vector_store = _get_vector_store(collection)
-        BATCH_SIZE = 32
-        total = len(all_splits)
-        print(f"[ingestion] {total} chunks a indexer par lots de {BATCH_SIZE}")
-        for i in range(0, total, BATCH_SIZE):
-            batch = all_splits[i:i + BATCH_SIZE]
-            vector_store.add_documents(documents=batch)
-            print(f"[ingestion] lot {i // BATCH_SIZE + 1} : {min(i + BATCH_SIZE, total)}/{total}")
-        cache_url(client, cache_key)
-        print(f"Source '{source}' ingested into collection '{collection}'.")
+    cited = cited_indices(full)
+    sources = [dict(s, cited=s["index"] in cited) for s in state["sources"]]
+    return {"answer": full.strip(), "sources": sources, "refused": False}
 
 
-async def stream_answer(question: str, collection: str = "default") -> AsyncGenerator[str, None]:
-    """Async generator that yields SSE-formatted events for a streaming chat response."""
-    graph = _build_graph()
-    sources = []
-    streamed_chars = 0
-
-    log.info("[stream] debut — collection=%s question=%r", collection, question)
-
-    async for event in graph.astream_events(
-        {"question": question, "collection": collection},
-        version="v2",
-    ):
-        kind = event["event"]
-        if kind == "on_chat_model_stream":
-            content = event["data"]["chunk"].content
-            if content:
-                streamed_chars += len(content)
-                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
-        elif kind == "on_chain_end" and event.get("name") == "retrieve":
-            output = event["data"].get("output", {})
-            sources = output.get("sources", [])
-            # When retrieve short-circuits, generate returns its answer without
-            # invoking the LLM — no on_chat_model_stream event is ever emitted,
-            # so the message has to be pushed to the client here or the UI would
-            # render an empty bubble.
-            fallback = output.get("answer")
-            if fallback:
-                streamed_chars += len(fallback)
-                yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
-
-    log.info("[stream] fin — %d caracteres envoyes, %d sources", streamed_chars, len(sources))
-    if streamed_chars == 0:
-        log.error("[stream] aucun caractere envoye au client — la bulle restera vide cote UI")
-
-    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+def _build_graph():
+    graph = StateGraph(State).add_sequence([condense, retrieve, generate])
+    graph.add_edge(START, "condense")
+    return graph.compile()
 
 
-async def create_and_run_graph(question: str, collection: str = "default") -> dict:
-    graph = _build_graph()
-    start = time.time()
-    response = await graph.ainvoke({"question": question, "collection": collection})
-    latency = round(time.time() - start, 2)
+_GRAPH = None
+
+
+def graph():
+    global _GRAPH
+    if _GRAPH is None:
+        _GRAPH = _build_graph()
+    return _GRAPH
+
+
+def _initial_state(question, collection_ids, history, model_id) -> State:
+    spec = resolve_model(model_id)  # raises ModelNotAllowed before any work
     return {
-        "answer": response["answer"],
-        "sources": response.get("sources", []),
-        "confidence_metric": response.get("confidence_metric", 0.0),
-        "latency_seconds": latency,
+        "question": question,
+        "collection_ids": [str(c) for c in collection_ids],
+        "history": list(history or []),
+        "model_id": spec.id,
     }
+
+
+def _result(state: dict, started: float) -> RAGResult:
+    latency = round(time.time() - started, 2)
+    refused = bool(state.get("refused"))
+    RAG_QUERIES.labels("refused" if refused else "answered").inc()
+    RAG_LATENCY.observe(latency)
+    return RAGResult(
+        answer=state.get("answer") or no_answer_text(),
+        sources=state.get("sources") or [],
+        confidence_metric=state.get("confidence_metric", 0.0) if not refused else 0.0,
+        refused=refused,
+        latency_seconds=latency,
+        model=state["model_id"],
+        standalone_question=state.get("standalone_question") or state["question"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def answer_question(
+    question: str,
+    collection_ids: Sequence[uuid.UUID | str],
+    history: Sequence[tuple[str, str]] | None = None,
+    model_id: str | None = None,
+) -> RAGResult:
+    started = time.time()
+    state = await graph().ainvoke(_initial_state(question, collection_ids, history, model_id))
+    return _result(state, started)
+
+
+async def stream_answer(
+    question: str,
+    collection_ids: Sequence[uuid.UUID | str],
+    history: Sequence[tuple[str, str]] | None = None,
+    model_id: str | None = None,
+) -> AsyncIterator[dict]:
+    """Yield ``{"type": "token", "content"}`` events, then one ``{"type": "result", ...}``.
+
+    Only tokens produced by the ``generate`` node are forwarded — the ``condense``
+    node also calls the LLM and its output must not reach the user. When retrieve
+    short-circuits, generate never calls the LLM, so the refusal is emitted from the
+    retrieve end event, otherwise the UI would render an empty bubble.
+    """
+    started = time.time()
+    initial = _initial_state(question, collection_ids, history, model_id)
+    final_state: dict | None = None
+    async for event in graph().astream_events(initial, version="v2"):
+        kind = event["event"]
+        node = (event.get("metadata") or {}).get("langgraph_node")
+        if kind == "on_chat_model_stream" and node == "generate":
+            chunk = event["data"]["chunk"]
+            content = chunk.content if isinstance(chunk.content, str) else "".join(
+                part.get("text", "") for part in chunk.content if isinstance(part, dict)
+            )
+            if content:
+                yield {"type": "token", "content": content}
+        elif kind == "on_chain_end" and event.get("name") == "retrieve":
+            output = event["data"].get("output") or {}
+            if output.get("answer"):
+                yield {"type": "token", "content": output["answer"]}
+        elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+            final_state = event["data"].get("output")
+    if final_state is None:  # pragma: no cover - defensive
+        raise RuntimeError("Le graphe RAG n'a pas produit d'état final.")
+    yield {"type": "result", **_result(final_state, started).as_dict()}
+
+
+async def create_and_run_graph(question: str, collection: str = "default", model_id: str | None = None) -> dict:
+    """Compatibility entry point (evaluation harness, scripts): collection by name."""
+    from src.db.models import Collection
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        col = db.query(Collection).filter(Collection.name == collection).first()
+    finally:
+        db.close()
+    if col is None:
+        raise ValueError(f"Collection inconnue : {collection}")
+    return (await answer_question(question, [col.id], model_id=model_id)).as_dict()

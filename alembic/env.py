@@ -1,30 +1,22 @@
-import os
 from logging.config import fileConfig
 
-from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-
-load_dotenv()
+from src.config import get_settings
+from src.db.models import Base
 
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# Wire our models for autogenerate support
-from src.db.models import Base  # noqa: E402
 target_metadata = Base.metadata
 
 
 def _get_url() -> str:
-    host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
-    db = os.getenv("POSTGRES_DB", "contexthub")
-    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+    # Tests (and tooling) can target another database via Config.attributes["url"].
+    return config.attributes.get("url") or get_settings().sqlalchemy_url
 
 
 def run_migrations_offline() -> None:

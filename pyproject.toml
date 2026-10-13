@@ -1,0 +1,25 @@
+[project]
+name = "contexthub-ai"
+version = "1.0.0"
+description = "Assistant documentaire souverain pour la conformité (RAG on-premise)"
+license = { text = "AGPL-3.0-only OR LicenseRef-ContextHub-Commercial" }
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["venv", "frontend", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008", "B904", "B905", "E501", "UP007"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["pg: requires a PostgreSQL+pgvector database (TEST_DATABASE_URL)"]
+filterwarnings = ["ignore::DeprecationWarning"]
