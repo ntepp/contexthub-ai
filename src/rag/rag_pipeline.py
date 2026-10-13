@@ -28,13 +28,33 @@ embeddings = initialize_embeddings()
 # Chunks strictly above this distance are discarded.
 MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.75"))
 
-NO_ANSWER = "The information is unavailable in the current knowledge base."
+# Number of candidate chunks pulled from pgvector before the distance filter is
+# applied. This used to be langchain-postgres' implicit default of 4, which caps
+# how much the distance threshold can ever do: on a question needing passages
+# from two documents, 4 candidates is the binding constraint, not the threshold.
+TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "4"))
+
+# Emitted verbatim in two places: by `retrieve` when nothing clears the distance
+# threshold, and by the LLM itself (injected into the prompt) when the retrieved
+# context does not support an answer. Both paths must produce the exact same
+# string — the evaluation harness matches on it, and the UI relies on it.
+# It MUST be written in the language of the indexed corpus.
+NO_ANSWER = os.getenv(
+    "NO_ANSWER_TEXT",
+    "L'information n'est pas disponible dans la base de connaissances actuelle.",
+)
 
 template = """You are an enterprise knowledge assistant.
-Answer the user's question only from the provided context.
-If the answer is not explicitly supported by the context, say that the information is unavailable.
-Keep the answer concise, factual and professional.
-Provide a confidence level at the end: High, Medium or Low.
+
+Rules, in order of precedence:
+1. If the context does not explicitly support an answer, reply with exactly the
+   following sentence, alone, with nothing before or after it — no preamble, no
+   confidence level:
+   {no_answer}
+2. Otherwise, answer only from the provided context, never from prior knowledge.
+3. Always write your answer in the same language as the question.
+4. Keep it concise, factual and professional, and end with a confidence level:
+   High, Medium or Low.
 
 Context:
 {context}
@@ -69,14 +89,15 @@ def _build_graph():
 def retrieve(state: State):
     collection = state.get("collection", "default")
     vector_store = _get_vector_store(collection)
-    results = vector_store.similarity_search_with_score(state["question"])
+    results = vector_store.similarity_search_with_score(state["question"], k=TOP_K)
     kept = [(doc, dist) for doc, dist in results if dist <= MAX_DISTANCE]
 
     log.info("[retrieve] collection=%s question=%r", collection, state["question"])
     log.info(
-        "[retrieve] %d/%d chunks retenus (max_distance=%.2f) — distances: %s",
+        "[retrieve] %d/%d chunks retenus (top_k=%d, max_distance=%.2f) — distances: %s",
         len(kept),
         len(results),
+        TOP_K,
         MAX_DISTANCE,
         ", ".join(f"{d:.3f}" for _, d in results) or "aucun resultat",
     )
@@ -98,8 +119,11 @@ def retrieve(state: State):
             "confidence_metric": 0.0,
         }
 
+    # Cosine distance runs to 2.0, so 1 - mean(distance) can go negative once
+    # MAX_DISTANCE is raised above 1.0. Clamped: a negative "confidence" is
+    # meaningless to the UI and to the report.
     top_distances = [dist for _, dist in kept[:3]]
-    confidence = round(1.0 - sum(top_distances) / len(top_distances), 3)
+    confidence = round(max(0.0, 1.0 - sum(top_distances) / len(top_distances)), 3)
 
     sources = [
         {"source": doc.metadata.get("source", "unknown"), "page": doc.metadata.get("page")}
@@ -117,7 +141,9 @@ async def generate(state: State):
     if state.get("answer"):
         return {"answer": state["answer"]}
     docs_content = "\n\n".join(doc.page_content for doc in state["context"])
-    messages = prompt.invoke({"question": state["question"], "context": docs_content})
+    messages = prompt.invoke(
+        {"question": state["question"], "context": docs_content, "no_answer": NO_ANSWER}
+    )
     llm = initialize_model_llm()
 
     log.info(

@@ -105,6 +105,8 @@ A RAG (Retrieval Augmented Generation) pipeline using **LangGraph** to orchestra
 | `POSTGRES_DB` | Database name | `contexthub` |
 | `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 | `RETRIEVAL_MAX_DISTANCE` | Max cosine distance for a chunk to be retained (lower = stricter) | `0.75` |
+| `RETRIEVAL_TOP_K` | Candidate chunks pulled from pgvector before the distance filter | `4` |
+| `NO_ANSWER_TEXT` | Refusal sentence, emitted verbatim by both `retrieve` and the LLM; must match the corpus language | *(French default)* |
 | `LOG_LEVEL` | Backend log verbosity | `INFO` |
 
 ### Vector store
@@ -120,7 +122,9 @@ To revert to ChromaDB:
 
 The graph uses a `TypedDict` state with six fields: `question`, `context`, `answer`, `sources`, `collection`, `confidence_metric`.
 
-**Scores are distances, not similarities.** `langchain-postgres` returns cosine *distance* from `similarity_search_with_score()` — `0.0` is a perfect match, higher is worse, and results arrive sorted ascending. `retrieve` keeps chunks with `distance <= RETRIEVAL_MAX_DISTANCE` and short-circuits to a fixed "information unavailable" answer when nothing qualifies. `confidence_metric` is `1 - mean(top-3 distances)`.
+**Scores are distances, not similarities.** `langchain-postgres` returns cosine *distance* from `similarity_search_with_score()` — `0.0` is a perfect match, higher is worse, and results arrive sorted ascending (`vectorstores.py`: `cosine_distance` labelled `"distance"`, `order_by(asc("distance"))`). `retrieve` pulls `RETRIEVAL_TOP_K` candidates, keeps those with `distance <= RETRIEVAL_MAX_DISTANCE`, and short-circuits to `NO_ANSWER` when nothing qualifies. `confidence_metric` is `max(0, 1 - mean(top-3 distances))` — clamped because cosine distance runs to 2.0.
+
+`RETRIEVAL_TOP_K` is the binding constraint, not the threshold: the filter can only discard from those k candidates, never reach past them.
 
 When `retrieve` short-circuits, `generate` returns that answer **without invoking the LLM**, so no `on_chat_model_stream` events are produced. `stream_answer()` therefore emits the short-circuit answer itself from the `retrieve` chain-end event — otherwise the UI renders an empty bubble.
 

@@ -86,7 +86,7 @@ Upload a PDF and track its ingestion status in real time. The job is processed b
 
 ![Q&A Demo](docs/screenshots/demo-ask.png)
 
-Every answer is derived strictly from indexed documents. The sidebar exposes live operational metrics (LLM provider, model, vector store, system status). Each response includes a **Retrieval Confidence** score (mean pgvector similarity of top-3 chunks) and an **End-to-end Latency** measurement.
+Every answer is derived strictly from indexed documents. The sidebar exposes live operational metrics (LLM provider, model, vector store, system status). Each response includes a **Retrieval Confidence** score (`1 - mean cosine distance` of the top-3 retained chunks) and an **End-to-end Latency** measurement.
 
 ---
 
@@ -137,11 +137,13 @@ LangGraph models the pipeline as a typed state machine with explicit node transi
 - **Testability** — each node is a plain Python function, unit-testable in isolation
 - **Extensibility** — adding reranking, query expansion, or a guardrails node means adding a new graph node, not refactoring a chain
 
-### 5. Similarity threshold over pure top-k retrieval
+### 5. Distance threshold over pure top-k retrieval
 
-`similarity_search_with_score` returns a relevance score per chunk. We filter at ≥ 0.50 rather than always returning the top-k results. When no chunk exceeds the threshold, the system returns *"The information is unavailable in the current knowledge base."* rather than constructing an answer from loosely related content.
+`similarity_search_with_score` on `langchain-postgres` returns a cosine **distance** per chunk — `0.0` is a perfect match, higher is worse, and results arrive sorted ascending. We discard every chunk above `RETRIEVAL_MAX_DISTANCE` (default `0.75`) rather than always returning the top-k results. When nothing qualifies, `retrieve` short-circuits and the system returns *"The information is unavailable in the current knowledge base."* — without ever invoking the LLM — rather than constructing an answer from loosely related content.
 
 This is the core mechanism behind grounded responses — the system knows what it doesn't know.
+
+> The score direction is the easiest thing to get wrong here: an earlier revision compared it as if it were a similarity, which silently discarded *every* match and made the system answer "information unavailable" to everything.
 
 ---
 
@@ -151,11 +153,11 @@ This is the core mechanism behind grounded responses — the system knows what i
 |---|---|
 | PDF & URL ingestion | `PDFDataLoader`, `WebDataLoader` + `RecursiveCharacterTextSplitter` |
 | Multilingual embeddings | `bge-m3` via Ollama (1024 dims, 8192 token context) |
-| Semantic search | pgvector cosine similarity, collection-scoped |
+| Semantic search | pgvector cosine distance, collection-scoped, thresholded at `RETRIEVAL_MAX_DISTANCE` |
 | Async job queue | Celery + Redis, auto-retry (max 3×) |
 | Streaming answers | Server-Sent Events via `llm.astream()` |
 | Observability | LangSmith traces (retrieve + generate nodes, latency, tokens) |
-| Confidence scoring | Mean pgvector score of top-3 retrieved chunks |
+| Confidence scoring | `1 - mean(cosine distance)` of the top-3 retained chunks |
 | Chunk quality filtering | Reject chunks < 40% alphabetic or < 20 characters |
 | Source attribution | Document path + page number returned with every answer |
 | LLM switching | `LLM_PROVIDER` env var — no code change |
@@ -272,6 +274,10 @@ Copy `.env.example` to `.env` and fill in your values:
 | `POSTGRES_DB` | Database name | `contexthub` |
 | `REDIS_HOST` | Redis hostname | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
+| `RETRIEVAL_MAX_DISTANCE` | Max cosine distance for a chunk to be retained (lower = stricter) | `0.75` |
+| `RETRIEVAL_TOP_K` | Candidate chunks pulled from pgvector before the distance filter | `4` |
+| `NO_ANSWER_TEXT` | Refusal sentence; must match the corpus language | *(French default)* |
+| `LOG_LEVEL` | Backend log verbosity | `INFO` |
 | `LANGSMITH_API_KEY` | LangSmith API key for tracing | *(optional)* |
 | `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing | `false` |
 | `LANGCHAIN_PROJECT` | LangSmith project name | `contexthub-ai` |

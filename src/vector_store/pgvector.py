@@ -27,15 +27,20 @@ class PGVectorManager(BaseVectorStoreManager):
     def __init__(self, embeddings, config: VectorStoreConfig = None):
         super().__init__(embeddings)
         self._config = config if isinstance(config, PGVectorConfig) else PGVectorConfig()
+        self._store: PGVector | None = None
 
     def create_vector_store(self) -> PGVector:
-        print(f"Using pgvector — collection: {self._config.collection_name}")
-        return PGVector(
-            embeddings=self._embeddings,
-            collection_name=self._config.collection_name,
-            connection=self._config.connection_string,
-            use_jsonb=True,
-        )
+        # Memoised: each PGVector() opens its own connection pool, so rebuilding
+        # it per call (e.g. once per ingestion batch) is pure overhead.
+        if self._store is None:
+            print(f"Using pgvector — collection: {self._config.collection_name}")
+            self._store = PGVector(
+                embeddings=self._embeddings,
+                collection_name=self._config.collection_name,
+                connection=self._config.connection_string,
+                use_jsonb=True,
+            )
+        return self._store
 
     def document_exists(self, identifier: str) -> bool:
         results = self.create_vector_store().similarity_search(identifier, k=1)
