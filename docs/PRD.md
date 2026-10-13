@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Statut** | v1.0 — en cours d'implémentation (branche `feature/commercial-v1`) |
+| **Statut** | v1.0 — implémentée, en recette (branche `feature/commercial-v1`) |
 | **Auteur** | ntepp |
-| **Dernière mise à jour** | 2026-10-13 |
+| **Dernière mise à jour** | 2026-10-14 |
 | **Licence produit** | Open-core : AGPL-3.0 + licence commerciale |
 
 ---
@@ -77,6 +77,7 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 | DOC-2 | OCR des pages sans couche texte (Tesseract, français + anglais) | Should |
 | DOC-3 | Déduplication par empreinte SHA-256 au sein d'une collection | Must |
 | DOC-4 | Découpage tenant compte de la structure (Titre / Chapitre / Section / Article) | Must |
+| DOC-10 | Reconnaissance des actes européens et de leur nom d'usage (MiFID II, EMIR, DORA…) | Should |
 | DOC-5 | Suppression d'un document (fichier, vecteurs, métadonnées) | Must |
 | DOC-6 | Suppression d'une collection complète | Must |
 | DOC-7 | Ingestion idempotente : un retry ne crée jamais de doublons | Must |
@@ -86,7 +87,7 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 #### Questions / réponses (QA)
 | ID | Exigence | Priorité |
 |---|---|---|
-| QA-1 | Recherche hybride : vecteurs (bge-m3) + plein texte PostgreSQL, fusion RRF | Must |
+| QA-1 | Recherche hybride : vecteurs (bge-m3) + plein texte PostgreSQL (français sans accents, préfixes), fusion RRF | Must |
 | QA-2 | Seuil de distance : refus sans appel au LLM si aucune source n'est pertinente | Must |
 | QA-3 | Citations numérotées `[n]` dans la réponse, liées aux sources | Must |
 | QA-4 | Sources : nom du document, page, section/article, extrait | Must |
@@ -184,22 +185,54 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 | Historique public sous MIT avant le passage AGPL | Les versions antérieures restent sous MIT ; la valeur commerciale porte sur la v1 (auth, audit, admin) |
 | Matériel GPU absent chez le client | Mode fournisseur cloud ou endpoint compatible OpenAI interne |
 
-## 10. État d'avancement
+## 10. Qualité mesurée
 
-Voir la section [Suivi d'implémentation](#11-suivi-dimplémentation), mise à jour à chaque phase.
+Banc d'évaluation sur le jeu MiFID / MiFIR / EMIR (18 questions), 100 % local (qwen3.5:9b,
+bge-m3), détail et méthode dans [evaluation.md](evaluation.md) :
+
+| Indicateur (section 8) | Cible | Mesuré (2026-10-14) |
+|---|---|---|
+| Exactitude du refus sur pièges | 100 % | **100 %** ✅ |
+| Taux de récupération de la bonne source | ≥ 85 % | **86 %** ✅ |
+| Score sémantique moyen | ≥ 0,80 | **0,77** ⚠️ |
+| Refus à tort (non ciblé) | — | 7 % |
+| Bon article cité (non ciblé) | — | 90 % |
+
+Le score de pertinence des sources ne sépare pas les réponses justes des fausses : il n'est pas
+affiché aux utilisateurs (décision issue de la mesure).
 
 ## 11. Suivi d'implémentation
 
-| Domaine | Statut |
-|---|---|
-| Licence AGPL + commerciale | ⏳ |
-| Configuration centralisée, traçage désactivé par défaut | ⏳ |
-| AUTH (comptes, SSO OIDC, rôles, droits, clés d'API) | ⏳ |
-| DOC (formats, OCR, dédup, suppression, idempotence, limites) | ⏳ |
-| QA (hybride, citations, historique, choix du modèle) | ⏳ |
-| LLM (Ollama, Anthropic, OpenAI, compatible OpenAI) | ⏳ |
-| AUD (journal chaîné, export, rétention, RGPD) | ⏳ |
-| ADM (utilisateurs, droits, état) | ⏳ |
-| EVAL (banc + rapports) | ⏳ |
-| NFR (Docker complet, santé, métriques, sauvegardes, CI, tests) | ⏳ |
-| Frontend (connexion, conversations, visionneuse, admin, FR) | ⏳ |
+| Domaine | Statut | Détail |
+|---|---|---|
+| Licence AGPL + commerciale | ✅ | `LICENSE`, `COMMERCIAL-LICENSE.md`, CLA dans `CONTRIBUTING.md`, lien source AGPL §13 dans l'interface |
+| Configuration centralisée | ✅ | `src/config.py`, garde-fous de production, traçage externe désactivé par défaut |
+| AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
+| DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
+| QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
+| QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
+| LLM-1 à LLM-4 | ✅ | Ollama, Anthropic, OpenAI, endpoint compatible OpenAI (Mistral, vLLM) |
+| AUD-1 à AUD-5 | ✅ | Journal chaîné SHA-256, vérification (UI + CLI), export CSV, rétention, effacement RGPD sans rupture de chaîne |
+| ADM-1 à ADM-3 | ✅ | Utilisateurs, accès par collection, état du système et flux de données |
+| EVAL-1 à EVAL-3 | ✅ | `eval/`, métriques dont calibration, rapports JSON + CSV |
+| NFR-1 Sécurité | ✅ | Voir `docs/security.md` |
+| NFR-2 Confidentialité | ✅ | Mode 100 % local vérifié ; polices auto-hébergées, CSP sans ressource externe |
+| NFR-3 Installation | ✅ | `docker compose up -d` testé de bout en bout (build, migrations, nginx, indexation, streaming SSE) |
+| NFR-4 Exploitation | ✅ | `/health`, `/ready`, `/metrics`, logs JSON, sauvegarde + restauration testées |
+| NFR-5 Qualité | ✅ | 93 tests (SQLite + PostgreSQL/pgvector réel), ruff, CI GitHub Actions |
+| NFR-6 Reproductibilité | ✅ | Dépendances Python épinglées, `package-lock.json` |
+| NFR-7 Langue | ✅ | Interface en français |
+| NFR-8 Performance | ⚠️ | Ingestion : 25 s pour 148 pages ✅. Réponse : non mesurée sur matériel cible (69 s sur GPU portable 4 Go partagé) |
+
+## 12. Reste à faire avant la première vente
+
+| Priorité | Action | Responsable |
+|---|---|---|
+| 🔴 | Passer le dépôt GitHub en privé ou assumer la publication AGPL ; faire relire licence commerciale, CLA, CGV et DPA par un avocat | Fondateur |
+| 🔴 | Remplacer `contact@VOTRE-DOMAINE.fr` dans la documentation | Fondateur |
+| 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
+| 🟠 | Étendre le jeu de référence à 100 questions (avec un expert conformité) ; atteindre ≥ 0,80 de score sémantique | Produit |
+| 🟠 | Découper les articles de définitions point par point ; décomposer les questions multi-textes ; mesurer le re-classement | Technique |
+| 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
+| 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |
+| 🟡 | v1.1 : connecteurs SharePoint / Confluence, groupes SSO → droits, export du journal vers SIEM | Technique |

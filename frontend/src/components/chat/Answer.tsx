@@ -16,13 +16,6 @@ function linkCitations(text: string, valid: Set<number>): string {
   })
 }
 
-export function relevanceLabel(confidence: number | null | undefined): string | null {
-  if (confidence == null || confidence <= 0) return null
-  if (confidence >= 0.55) return 'élevée'
-  if (confidence >= 0.4) return 'moyenne'
-  return 'faible'
-}
-
 interface Props {
   message: ChatMessage
   streaming: boolean
@@ -59,7 +52,6 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
     await api.feedback(message.id, next as -1 | 0 | 1).catch(() => setFeedback(feedback))
   }
 
-  const relevance = relevanceLabel(message.confidence)
   const cited = sources.filter((s) => s.cited).length
 
   return (
@@ -116,11 +108,8 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
               {cited > 0 ? `${cited} source${cited > 1 ? 's' : ''} citée${cited > 1 ? 's' : ''}` : `${sources.length} sources consultées`}
             </span>
           )}
-          {relevance && (
-            <span title="Proximité entre la question et les passages retrouvés. Elle ne garantit pas l'exactitude de la réponse : vérifiez les sources.">
-              Pertinence des sources : {relevance}
-            </span>
-          )}
+          {/* No "confidence" indicator on purpose: on the MiFID benchmark the retrieval score
+              does not separate right from wrong answers (docs/evaluation.md). */}
           {message.latency_seconds != null && <span>{message.latency_seconds.toFixed(1).replace('.', ',')} s</span>}
           {message.model && <span>{message.model.split(':').slice(1).join(':')}</span>}
           <span className="ml-auto flex gap-1">

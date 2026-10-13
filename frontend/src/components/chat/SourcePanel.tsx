@@ -50,11 +50,12 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
                 {s.index}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium" title={s.filename}>
-                  {s.filename}
+                <p className="truncate text-sm font-medium" title={s.doc_title ?? s.filename}>
+                  {s.doc_title ?? s.filename}
                 </p>
-                <p className="text-xs text-slate">
+                <p className="truncate text-xs text-slate" title={s.filename}>
                   {s.page ? `Page ${s.page}` : 'Document sans pagination'}
+                  {s.doc_title && `, ${s.filename}`}
                   {!s.cited && ', consultée mais non citée'}
                 </p>
               </div>
@@ -82,7 +83,7 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
       <Dialog
         open={viewing !== null}
         onOpenChange={(open) => !open && setViewing(null)}
-        title={viewing?.filename ?? ''}
+        title={viewing?.doc_title ?? viewing?.filename ?? ''}
         description={viewing?.section_path.join(' › ')}
         wide
       >

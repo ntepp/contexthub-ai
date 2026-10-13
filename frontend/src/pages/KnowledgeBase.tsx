@@ -261,6 +261,7 @@ export function KnowledgeBase() {
                             {d.filename}
                           </span>
                         )}
+                        {d.title && <p className="mt-0.5 text-xs text-slate">{d.title}</p>}
                         {d.error_message && <p className="mt-1 text-xs text-danger">{d.error_message}</p>}
                         {d.warnings.map((w) => (
                           <p key={w} className="mt-1 flex items-start gap-1 text-xs text-refusal">

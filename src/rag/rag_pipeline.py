@@ -131,6 +131,7 @@ def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
                 "document_id": str(chunk.document_id),
                 "collection_id": str(chunk.collection_id),
                 "filename": meta.get("filename", "document"),
+                "doc_title": meta.get("doc_title"),
                 "page": meta.get("page"),
                 "section": meta.get("section"),
                 "section_path": meta.get("section_path") or [],

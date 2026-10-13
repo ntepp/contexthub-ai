@@ -70,6 +70,7 @@ export interface StoredDocument {
   id: string
   collection_id: string
   filename: string
+  title: string | null
   mime_type: string | null
   size_bytes: number
   source_url: string | null
@@ -89,6 +90,7 @@ export interface Source {
   document_id: string
   collection_id: string
   filename: string
+  doc_title: string | null
   page: number | null
   section: string | null
   section_path: string[]
