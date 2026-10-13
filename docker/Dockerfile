@@ -21,9 +21,11 @@ COPY src ./src
 COPY eval ./eval
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
+# The sed strips CR characters in case the build context was checked out with CRLF endings.
 RUN useradd --create-home --uid 10001 contexthub \
     && mkdir -p /data/uploads \
     && chown -R contexthub:contexthub /data \
+    && sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
     && chmod +x /usr/local/bin/entrypoint.sh
 USER contexthub
 

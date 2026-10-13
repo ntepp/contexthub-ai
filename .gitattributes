@@ -1,0 +1,10 @@
+# Files executed or parsed inside Linux containers must keep LF endings, whatever the
+# checkout platform (a CRLF entrypoint fails with "/bin/sh^M: not found").
+*.sh            text eol=lf
+docker/**       text eol=lf
+Dockerfile      text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+*.bat           text eol=crlf
+*.png           binary
+*.pdf           binary
