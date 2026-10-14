@@ -22,7 +22,7 @@ Une licence commerciale vous libère des obligations de l'AGPL et inclut :
   montées de version) ;
 - l'évaluation de la qualité des réponses sur votre propre corpus.
 
-Contact : contact@VOTRE-DOMAINE.fr (à remplacer)
+Contact : ntepp.marcus@gmail.com
 
 ## 3. Historique
 

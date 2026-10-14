@@ -42,4 +42,4 @@ description de la pull request.
 
 ## Signaler une vulnérabilité
 
-N'ouvrez pas d'issue publique : écrivez à contact@VOTRE-DOMAINE.fr (à remplacer). Voir [docs/security.md](docs/security.md).
+N'ouvrez pas d'issue publique : écrivez à ntepp.marcus@gmail.com. Voir [docs/security.md](docs/security.md).

@@ -228,8 +228,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 
 | Priorité | Action | Responsable |
 |---|---|---|
-| 🔴 | Passer le dépôt GitHub en privé ou assumer la publication AGPL ; faire relire licence commerciale, CLA, CGV et DPA par un avocat | Fondateur |
-| 🔴 | Remplacer `contact@VOTRE-DOMAINE.fr` dans la documentation | Fondateur |
+| 🔴 | Faire relire licence commerciale, CLA, CGV et DPA par un avocat (dépôt public : publication AGPL assumée) | Fondateur |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
 | 🟠 | Étendre le jeu de référence à 100 questions (avec un expert conformité) ; atteindre ≥ 0,80 de score sémantique | Produit |
 | 🟠 | Découper les articles de définitions point par point ; décomposer les questions multi-textes ; mesurer le re-classement | Technique |
