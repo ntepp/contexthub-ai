@@ -1,188 +1,273 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { Send, Square } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { ArrowUp, BookOpen, CloudUpload, Square } from 'lucide-react'
+import { api, errorMessage, streamAsk, type ChatMessage, type Model } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { streamAnswer, getCollections } from '@/lib/api'
-import { MessageBubble, type Message } from '@/components/chat/MessageBubble'
-import { ModelSelector } from '@/components/chat/ModelSelector'
+import { Answer } from '@/components/chat/Answer'
+import { SourcePanel } from '@/components/chat/SourcePanel'
+import { CONVERSATIONS_CHANGED } from '@/components/layout/Sidebar'
 
-interface Collection { id: string; name: string }
+const ALL = '__all__'
 
 export function Chat() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const { conversationId } = useParams()
+  const navigate = useNavigate()
+  const { user, refresh } = useAuth()
+  const collections = user?.collections ?? []
+
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [model, setModel] = useState('')
-  const [collection, setCollection] = useState('default')
-  const [collections, setCollections] = useState<Collection[]>([])
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [scope, setScope] = useState<string>(ALL)
+  const [models, setModels] = useState<Model[]>([])
+  const [model, setModel] = useState<string>('')
+  const [panel, setPanel] = useState<{ message: number; source: number } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // A conversation created by the current stream must not be reloaded from the server mid-answer.
+  const createdHere = useRef<string | null>(null)
 
   useEffect(() => {
-    getCollections().then(setCollections).catch(() => {})
+    refresh() // access rights may have changed since login
+    api
+      .models()
+      .then((data) => {
+        setModels(data.models)
+        setModel((current) => current || data.default)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    setPanel(null)
+    if (!conversationId) {
+      setMessages([])
+      inputRef.current?.focus()
+      return
+    }
+    if (createdHere.current === conversationId) return
+    api
+      .conversation(conversationId)
+      .then((c) => {
+        setMessages(c.messages)
+        if (c.collection_ids.length === 1) setScope(c.collection_ids[0])
+        else setScope(ALL)
+      })
+      .catch(() => navigate('/', { replace: true }))
+  }, [conversationId, navigate])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages])
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort()
-  }, [])
+  const updateLast = (patch: (m: ChatMessage) => ChatMessage) =>
+    setMessages((list) => {
+      const next = [...list]
+      next[next.length - 1] = patch(next[next.length - 1])
+      return next
+    })
 
   const send = useCallback(async () => {
-    const q = input.trim()
-    if (!q || streaming) return
-
+    const question = input.trim()
+    if (!question || streaming) return
     setInput('')
-    setMessages((prev) => [...prev, { role: 'user', content: q }])
-
-    // Add an empty assistant message that we'll fill token by token
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+    setPanel(null)
+    setMessages((list) => [...list, { role: 'user', content: question }, { role: 'assistant', content: '', pending: true }])
     setStreaming(true)
-
     const abort = new AbortController()
     abortRef.current = abort
+    let created: string | null = null
+    try {
+      await streamAsk(
+        {
+          question,
+          conversation_id: conversationId,
+          collection_ids: scope === ALL ? undefined : [scope],
+          model: model || undefined,
+        },
+        (event) => {
+          if (event.type === 'meta' && !conversationId) {
+            created = event.conversation_id
+            createdHere.current = event.conversation_id
+          } else if (event.type === 'token') {
+            updateLast((m) => ({ ...m, content: m.content + event.content }))
+          } else if (event.type === 'final') {
+            updateLast(() => ({
+              id: event.message_id,
+              role: 'assistant',
+              content: event.answer,
+              sources: event.sources,
+              confidence: event.confidence_metric,
+              refused: event.refused,
+              model: event.model,
+              latency_seconds: event.latency_seconds,
+            }))
+          } else if (event.type === 'error') {
+            updateLast(() => ({ role: 'assistant', content: event.message, error: true }))
+          }
+        },
+        abort.signal,
+      )
+    } catch (err) {
+      if (!abort.signal.aborted) {
+        updateLast(() => ({ role: 'assistant', content: errorMessage(err), error: true }))
+      } else {
+        updateLast((m) => ({ ...m, pending: false, content: m.content || 'Réponse interrompue.' }))
+      }
+    } finally {
+      setStreaming(false)
+      abortRef.current = null
+      // Navigate only once the answer is complete, so the page is never re-rendered mid-stream.
+      if (created) {
+        navigate(`/c/${created}`, { replace: true })
+        window.dispatchEvent(new Event(CONVERSATIONS_CHANGED))
+      }
+    }
+  }, [input, streaming, conversationId, scope, model, navigate])
 
-    await streamAnswer(q, collection, {
-      signal: abort.signal,
-      onToken: (token) => {
-        setMessages((prev) => {
-          const updated = [...prev]
-          const last = updated[updated.length - 1]
-          if (last?.role === 'assistant') {
-            updated[updated.length - 1] = { ...last, content: last.content + token }
-          }
-          return updated
-        })
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-      },
-      onSources: (sources) => {
-        setMessages((prev) => {
-          const updated = [...prev]
-          const last = updated[updated.length - 1]
-          if (last?.role === 'assistant') {
-            updated[updated.length - 1] = { ...last, sources }
-          }
-          return updated
-        })
-      },
-      onDone: () => setStreaming(false),
-      onError: () => {
-        setMessages((prev) => {
-          const updated = [...prev]
-          const last = updated[updated.length - 1]
-          if (last?.role === 'assistant' && !last.content) {
-            updated[updated.length - 1] = {
-              ...last,
-              content: 'Error contacting backend. Is the API running?',
-            }
-          }
-          return updated
-        })
-        setStreaming(false)
-      },
-    })
-  }, [input, streaming, collection])
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       send()
     }
   }
 
+  const selectedModel = models.find((m) => m.id === model)
+  const panelSources = panel ? messages[panel.message]?.sources ?? [] : []
+  const noCollections = collections.length === 0
+
   return (
-    <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-surface shrink-0">
-        <div className="flex items-center gap-3">
-          <ModelSelector value={model} onChange={setModel} />
-          <select
-            value={collection}
-            onChange={(e) => setCollection(e.target.value)}
-            className="bg-surface border border-border text-secondary text-sm rounded-lg px-3 py-1.5 outline-none focus:border-accent hover:border-muted transition-colors"
-          >
-            {[...new Set(['default', ...collections.map((c) => c.name)])].map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-surface px-6 py-2.5">
+          <label className="flex items-center gap-2 text-sm text-slate">
+            <BookOpen size={16} />
+            <span className="sr-only">Périmètre de recherche</span>
+            <select
+              className="rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink"
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              disabled={streaming}
+            >
+              <option value={ALL}>Toutes mes collections</option>
+              {collections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {models.length > 1 && (
+            <label className="flex items-center gap-2 text-sm text-slate">
+              <span className="sr-only">Modèle</span>
+              <select
+                className="rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={streaming}
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id} disabled={!m.available}>
+                    {m.name} ({m.is_local ? 'local' : m.provider_label}){m.available ? '' : ', indisponible'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {selectedModel && !selectedModel.is_local && (
+            <span className="flex items-center gap-1.5 rounded-md bg-cloud-soft px-2 py-1 text-xs text-cloud">
+              <CloudUpload size={14} />
+              Les extraits utiles de vos documents sont envoyés à {selectedModel.provider_label}.
+            </span>
+          )}
         </div>
 
-        {messages.length > 0 && !streaming && (
-          <button
-            onClick={() => setMessages([])}
-            className="text-xs text-muted-fg hover:text-secondary transition-colors"
-          >
-            Clear chat
-          </button>
-        )}
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-3 opacity-40">
-            <div className="text-4xl">✦</div>
-            <p className="text-sm text-muted-fg">Ask anything about your documents</p>
-          </div>
-        ) : (
-          messages.map((m, i) => {
-            const isStreamingLast = streaming && i === messages.length - 1 && m.role === 'assistant'
-            return (
-              <div key={i} className={cn(isStreamingLast && 'relative')}>
-                <MessageBubble {...m} />
-                {isStreamingLast && m.content && (
-                  <span className="inline-block w-0.5 h-4 bg-accent ml-0.5 animate-pulse align-middle" />
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl px-6 py-8">
+            {messages.length === 0 ? (
+              <div className="pt-[12vh]">
+                <h1 className="font-serif text-3xl leading-tight">Que cherchez-vous dans vos textes ?</h1>
+                <p className="mt-3 max-w-xl text-slate">
+                  Chaque réponse s'appuie uniquement sur les documents de vos collections et renvoie à la page exacte.
+                  Si les documents ne permettent pas de répondre, ContextHub le dit.
+                </p>
+                {noCollections && (
+                  <p className="mt-6 rounded-md border border-refusal/30 bg-refusal-soft px-4 py-3 text-sm text-refusal">
+                    Vous n'avez encore accès à aucune collection. Demandez un accès à votre administrateur.
+                  </p>
                 )}
               </div>
-            )
-          })
-        )}
-        <div ref={bottomRef} />
+            ) : (
+              <div className="space-y-8">
+                {messages.map((m, i) =>
+                  m.role === 'user' ? (
+                    <div key={i} className="flex justify-end">
+                      <p className="max-w-[85%] whitespace-pre-wrap rounded-lg bg-wash px-4 py-2.5 text-ink">{m.content}</p>
+                    </div>
+                  ) : (
+                    <Answer
+                      key={i}
+                      message={m}
+                      streaming={streaming && i === messages.length - 1}
+                      activeSource={panel?.message === i ? panel.source : null}
+                      onCite={(source) => setPanel({ message: i, source })}
+                    />
+                  ),
+                )}
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+
+        <div className="border-t border-rule bg-surface px-6 py-4">
+          <div className="mx-auto max-w-3xl">
+            <div className="flex items-end gap-2 rounded-lg border border-rule bg-surface p-2 focus-within:border-ledger">
+              <label htmlFor="question" className="sr-only">
+                Votre question
+              </label>
+              <textarea
+                id="question"
+                ref={inputRef}
+                rows={1}
+                value={input}
+                disabled={noCollections}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  e.currentTarget.style.height = 'auto'
+                  e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 200)}px`
+                }}
+                onKeyDown={onKeyDown}
+                placeholder="Posez une question sur vos documents. Maj + Entrée pour un saut de ligne."
+                className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-1.5 text-ink placeholder:text-faint focus:outline-none"
+              />
+              <button
+                onClick={streaming ? () => abortRef.current?.abort() : send}
+                disabled={!streaming && !input.trim()}
+                className={cn('btn h-9 w-9 shrink-0 p-0', streaming ? 'bg-wash text-ink' : 'bg-ledger text-white hover:bg-ledger-dark')}
+                aria-label={streaming ? 'Interrompre la réponse' : 'Envoyer la question'}
+              >
+                {streaming ? <Square size={14} fill="currentColor" /> : <ArrowUp size={16} />}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-faint">
+              Outil d'aide à la recherche documentaire. Vérifiez les sources citées avant de vous appuyer sur une
+              réponse.
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* Input */}
-      <div className="px-6 pb-6 shrink-0">
-        <div
-          className={cn(
-            'flex items-end gap-3 rounded-2xl border border-border bg-surface p-3 transition-colors',
-            'focus-within:border-accent/50',
-          )}
-        >
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question… (Shift+Enter for new line)"
-            rows={1}
-            disabled={streaming}
-            className="flex-1 bg-transparent text-sm text-primary placeholder-muted-fg resize-none outline-none max-h-40 leading-relaxed disabled:opacity-50"
-            style={{ height: 'auto' }}
-            onInput={(e) => {
-              const t = e.currentTarget
-              t.style.height = 'auto'
-              t.style.height = `${t.scrollHeight}px`
-            }}
-          />
-          <button
-            onClick={streaming ? stop : send}
-            disabled={!streaming && !input.trim()}
-            className={cn(
-              'flex items-center justify-center w-8 h-8 rounded-xl transition-all shrink-0',
-              streaming
-                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                : input.trim()
-                ? 'bg-accent text-white hover:bg-accent/80'
-                : 'bg-muted/30 text-muted-fg cursor-not-allowed',
-            )}
-          >
-            {streaming ? <Square size={12} fill="currentColor" /> : <Send size={14} />}
-          </button>
-        </div>
-        <p className="text-center text-[10px] text-muted-fg mt-2 opacity-50">
-          Answers sourced from your indexed documents
-        </p>
-      </div>
+      {panel && panelSources.length > 0 && (
+        <SourcePanel
+          sources={panelSources}
+          active={panel.source}
+          onSelect={(source) => setPanel({ ...panel, source })}
+          onClose={() => setPanel(null)}
+        />
+      )}
     </div>
   )
 }

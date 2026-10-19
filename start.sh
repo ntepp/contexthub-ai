@@ -7,7 +7,7 @@ if [ -f "venv/bin/activate" ]; then
 fi
 
 echo "[1/4] Starting Docker services (Redis + PostgreSQL)..."
-docker-compose up -d
+docker compose -f docker-compose.dev.yaml up -d
 
 echo "[2/4] Waiting for PostgreSQL to be ready..."
 sleep 4
@@ -37,6 +37,6 @@ echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Trap Ctrl+C and kill all background processes
-trap "echo 'Stopping...'; kill $CELERY_PID $UVICORN_PID $FRONTEND_PID 2>/dev/null; docker-compose stop; exit 0" INT
+trap "echo 'Stopping...'; kill $CELERY_PID $UVICORN_PID $FRONTEND_PID 2>/dev/null; docker compose -f docker-compose.dev.yaml stop; exit 0" INT
 
 wait

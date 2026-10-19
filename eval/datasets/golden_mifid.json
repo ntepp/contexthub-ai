@@ -1,0 +1,179 @@
+{
+  "metadata": {
+    "corpus": "MiFID II (2014/65/UE), MiFIR (600/2014), EMIR (648/2012) — versions FR EUR-Lex",
+    "collection": "mifid",
+    "expected_documents": [
+      "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "RAG-CELEX_32012R0648_FR_TXT.pdf"
+    ],
+    "version": "0.2",
+    "created": "2025-08-06",
+    "updated": "2026-08-14",
+    "notes": "Jeu de reference pour l'evaluation RAG. Reponses ancrees dans les textes EUR-Lex FR (verifiees ligne a ligne dans les PDF sources). Les entrees answerable=false sont des pieges de grounding : le bon comportement est le refus, dont le libelle doit correspondre exactement a NO_ANSWER dans src/rag/rag_pipeline.py."
+  },
+  "questions": [
+    {
+      "id": "Q001",
+      "category": "factual_simple",
+      "question": "A partir de quelle date la directive MiFID II est-elle applicable selon le texte 2014/65/UE ?",
+      "ground_truth": "Selon l'article 93 du texte d'origine 2014/65/UE, les Etats membres appliquent ces dispositions a partir du 3 janvier 2017 (date d'application initiale ; report ulterieur au 3 janvier 2018 non couvert par ce corpus).",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 93",
+      "answerable": true
+    },
+    {
+      "id": "Q002",
+      "category": "definition",
+      "question": "Comment MiFID II definit-elle un systeme organise de negociation (OTF) ?",
+      "ground_truth": "Selon l'article 4, paragraphe 1, point 23), de MiFID II, un OTF (\"systeme organise de negociation\") est un systeme multilateral, autre qu'un marche reglemente ou un MTF, au sein duquel de multiples interets acheteurs et vendeurs exprimes par des tiers pour des obligations, des produits financiers structures, des quotas d'emission ou des instruments derives peuvent interagir d'une maniere qui aboutisse a la conclusion de contrats conformement au titre II de la directive.",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 4, paragraphe 1, point 23)",
+      "answerable": true
+    },
+    {
+      "id": "Q003",
+      "category": "cross_document",
+      "question": "Quels instruments sont soumis a l'obligation de compensation, et ou sont definies les obligations de transparence applicables ?",
+      "ground_truth": "L'obligation de compensation des contrats derives de gre a gre appartenant a une categorie de produits declaree soumise a cette obligation est etablie par EMIR (reglement 648/2012, article 4, en lien avec l'article 5, paragraphe 2). Les regles de transparence pre- et post-negociation pour les plates-formes de negociation, ainsi que pour les internalisateurs systematiques et les entreprises d'investissement negociant des instruments de gre a gre, sont definies par MiFIR (reglement 600/2014, titre II \"Regles de transparence pour les plates-formes de negociation\" et titre III \"Regles de transparence pour les internalisateurs systematiques et les entreprises d'investissement negociant des instruments de gre a gre\").",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf; RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "EMIR art. 4 ; MiFIR titres II-III",
+      "answerable": true
+    },
+    {
+      "id": "Q004",
+      "category": "reasoning_conditional",
+      "question": "Dans quel cas un internalisateur systematique peut-il etre dispense de rendre publiques ses cotations fermes ?",
+      "ground_truth": "Pour les actions et instruments assimiles, l'article 14, paragraphe 2, de MiFIR dispense l'internalisateur systematique de l'obligation de rendre publiques ses cotations fermes lorsqu'il effectue des transactions d'une taille superieure a la taille normale de marche. Pour les obligations, produits financiers structures, quotas d'emission et instruments derives, l'article 18 prevoit des dispenses similaires : absence de marche liquide (avec derogation possible dans les conditions de l'article 9, paragraphe 1), transactions depassant la taille specifique a l'instrument determinee en application de l'article 9, paragraphe 5, point d) (article 18, paragraphe 10), ou instrument tombe sous le seuil de liquidite determine en application de l'article 9, paragraphe 4 (article 18, paragraphe 6).",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "MiFIR articles 14 et 18",
+      "answerable": true
+    },
+    {
+      "id": "Q005",
+      "category": "unanswerable_trap",
+      "question": "Quel est le montant maximal en euros de l'amende qu'un regulateur national doit imposer pour un premier manquement aux regles de meilleure execution de MiFID II ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "Q006",
+      "category": "factual_simple",
+      "question": "Quelle autorite est chargee d'etablir et de publier la liste de tous les internalisateurs systematiques de l'Union ?",
+      "ground_truth": "Selon l'article 15, paragraphe 1, de MiFIR, les entreprises repondant a la definition d'internalisateur systematique doivent le notifier a leur autorite competente, qui transmet cette notification a l'AEMF ; c'est l'AEMF qui etablit la liste de tous les internalisateurs systematiques de l'Union.",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "Article 15, paragraphe 1",
+      "answerable": true
+    },
+    {
+      "id": "Q007",
+      "category": "factual_simple",
+      "question": "Pendant combien de temps une contrepartie doit-elle conserver l'enregistrement d'un contrat derive conclu, selon EMIR ?",
+      "ground_truth": "Selon l'article 9, paragraphe 2, d'EMIR, les contreparties conservent un enregistrement de tout contrat derive qu'elles ont conclu, et de toute modification, pendant une duree minimale de cinq ans apres la cessation du contrat.",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf",
+      "reference_article": "Article 9, paragraphe 2",
+      "answerable": true
+    },
+    {
+      "id": "Q008",
+      "category": "factual_simple",
+      "question": "Quel seuil de capitalisation boursiere moyenne definit une petite ou moyenne entreprise (PME) au sens de MiFID II ?",
+      "ground_truth": "Selon l'article 4, paragraphe 1, point 13), de MiFID II, sont considerees comme PME les societes dont la capitalisation boursiere moyenne a ete inferieure a 200 000 000 EUR sur la base des cotations de fin d'exercice au cours des trois dernieres annees civiles.",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 4, paragraphe 1, point 13)",
+      "answerable": true
+    },
+    {
+      "id": "Q009",
+      "category": "definition",
+      "question": "Comment MiFID II definit-elle un internalisateur systematique ?",
+      "ground_truth": "Selon l'article 4, paragraphe 1, point 20), de MiFID II, un internalisateur systematique est une entreprise d'investissement qui, de facon organisee, frequente et systematique, negocie pour compte propre lorsqu'elle execute les ordres des clients en dehors d'un marche reglemente, d'un MTF ou d'un OTF, sans operer de systeme multilateral ; ce statut ne s'applique que lorsque les seuils predefinis relatifs au caractere frequent et systematique et au caractere substantiel sont depasses, ou lorsque l'entreprise choisit volontairement de relever de ce regime.",
+      "source_document": "RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "Article 4, paragraphe 1, point 20)",
+      "answerable": true
+    },
+    {
+      "id": "Q010",
+      "category": "definition",
+      "question": "Comment EMIR definit-elle une contrepartie financiere ?",
+      "ground_truth": "Selon l'article 2, point 8), d'EMIR, une contrepartie financiere est notamment une entreprise d'investissement, un etablissement de credit, une entreprise d'assurance ou de reassurance, un OPCVM (et le cas echeant sa societe de gestion), une institution de retraite professionnelle, ou un fonds d'investissement alternatif gere par un gestionnaire agree ou enregistre, dans chaque cas agrees conformement a la legislation de l'Union applicable a leur secteur.",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf",
+      "reference_article": "Article 2, point 8)",
+      "answerable": true
+    },
+    {
+      "id": "Q011",
+      "category": "definition",
+      "question": "Comment EMIR definit-elle un contrat derive de gre a gre ?",
+      "ground_truth": "Selon l'article 2, point 7), d'EMIR, un produit (ou contrat) derive de gre a gre est un contrat derive dont l'execution n'a pas lieu sur un marche reglemente au sens de la directive relative aux marches d'instruments financiers, ni sur un marche de pays tiers considere comme equivalent a un marche reglemente.",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf",
+      "reference_article": "Article 2, point 7)",
+      "answerable": true
+    },
+    {
+      "id": "Q012",
+      "category": "cross_document",
+      "question": "Comment l'obligation d'execution des internalisateurs systematiques prevue par MiFIR s'articule-t-elle avec l'obligation de meilleure execution de MiFID II ?",
+      "ground_truth": "MiFIR (article 15, paragraphe 2, et article 18, paragraphe 9) impose aux internalisateurs systematiques d'executer les ordres de leurs clients dans le respect de l'article 27 de MiFID II (obligation d'executer les ordres aux conditions les plus favorables pour le client) ; les cotations fermes publiees par l'internalisateur doivent ainsi rester compatibles avec le devoir de meilleure execution defini par MiFID II.",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf; RAG-CELEX_32014L0065_FR_TXT.pdf",
+      "reference_article": "MiFIR art. 15 §2 et 18 §9 ; MiFID II art. 27",
+      "answerable": true
+    },
+    {
+      "id": "Q013",
+      "category": "cross_document",
+      "question": "Comment la notion de contrepartie financiere definie par EMIR est-elle utilisee par l'obligation de negociation sur plate-forme prevue par MiFIR ?",
+      "ground_truth": "L'article 28, paragraphe 1, de MiFIR reprend directement la definition de \"contrepartie financiere\" de l'article 2, point 8), d'EMIR (ainsi que la notion de contrepartie non financiere remplissant les conditions de l'article 10, paragraphe 1, point b), d'EMIR) pour determiner quelles contreparties sont soumises a l'obligation de negocier les derives concernes exclusivement sur des marches reglementes, MTF, OTF ou plates-formes de pays tiers equivalentes.",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf; RAG-CELEX_32012R0648_FR_TXT.pdf",
+      "reference_article": "MiFIR art. 28 ; EMIR art. 2(8) et art. 10 §1(b)",
+      "answerable": true
+    },
+    {
+      "id": "Q014",
+      "category": "reasoning_conditional",
+      "question": "Dans quel cas une contrepartie non financiere devient-elle soumise a l'obligation de compensation prevue par EMIR ?",
+      "ground_truth": "Selon l'article 10 d'EMIR, lorsqu'une contrepartie non financiere prend des positions sur des contrats derives de gre a gre dont la position moyenne mobile sur trente jours ouvrables depasse le seuil de compensation determine conformement au paragraphe 3, elle doit en informer immediatement l'AEMF et l'autorite competente, devient soumise a l'obligation de compensation pour ses contrats futurs, et doit compenser tous les contrats concernes dans les quatre mois suivant le depassement du seuil.",
+      "source_document": "RAG-CELEX_32012R0648_FR_TXT.pdf",
+      "reference_article": "Article 10",
+      "answerable": true
+    },
+    {
+      "id": "Q015",
+      "category": "reasoning_conditional",
+      "question": "Dans quels cas une plate-forme de negociation peut-elle etre dispensee de l'obligation de transparence pre-negociation pour les actions selon MiFIR ?",
+      "ground_truth": "Selon l'article 4 de MiFIR, les autorites competentes peuvent dispenser une plate-forme de l'obligation de rendre publiques les informations pre-negociation notamment pour : les systemes fondes sur un prix de reference fiable et largement diffuse (\"reference price systems\") ; les systemes enregistrant des transactions negociees dans certaines conditions de prix ; les ordres d'une taille elevee par rapport a la taille normale de marche ; et les ordres places dans un systeme de gestion des ordres en attente de divulgation.",
+      "source_document": "RAG-CELEX_32014R0600_FR_TXT.pdf",
+      "reference_article": "Article 4",
+      "answerable": true
+    },
+    {
+      "id": "Q016",
+      "category": "unanswerable_trap",
+      "question": "Combien d'entreprises d'investissement etaient enregistrees comme internalisateurs systematiques dans l'Union europeenne en 2023 ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "Q017",
+      "category": "unanswerable_trap",
+      "question": "Quelle est l'autorite francaise designee comme autorite competente pour l'application de MiFID II ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "Q018",
+      "category": "unanswerable_trap",
+      "question": "Quel est le montant exact, en euros, du seuil de compensation EMIR applicable aux derives de credit pour une contrepartie non financiere ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    }
+  ]
+}

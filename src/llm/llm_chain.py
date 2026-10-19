@@ -1,6 +1,15 @@
-from src.llm.factory import LLMFactory, LLMProvider
+from src.llm.factory import LLMFactory, ModelSpec, resolve_model
+
+# Tests replace this with a fake chat model; production code always goes through it.
+_llm_override = None
 
 
-def initialize_model_llm(model_name=None, provider=None):
-    llm_provider = LLMProvider(provider) if provider else None
-    return LLMFactory.create(provider=llm_provider, model_name=model_name)
+def initialize_model_llm(spec: ModelSpec | None = None):
+    if _llm_override is not None:
+        return _llm_override
+    return LLMFactory.create(spec or resolve_model(None))
+
+
+def set_llm_override(llm) -> None:
+    global _llm_override
+    _llm_override = llm
