@@ -64,7 +64,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title=f"{settings.app_name} — API",
-        description="Assistant documentaire souverain pour la conformité. Authentification requise.",
+        description="Assistant documentaire souverain pour l'entreprise. Authentification requise.",
         version=settings.app_version,
         lifespan=lifespan,
         docs_url="/docs" if settings.environment != "production" else None,

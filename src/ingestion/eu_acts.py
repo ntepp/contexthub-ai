@@ -12,17 +12,40 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Official number -> usual name(s). Financial-services acts most often found in
-# French compliance corpora.
+# Official number -> usual name. Any act is recognised by its official reference; this map
+# only adds the nickname people actually type. Extend it for a client's sector.
 KNOWN_ACTS: dict[str, str] = {
+    # Every company: data, digital, cybersecurity, employment, sustainability, products
+    "2016/679": "RGPD",
+    "2024/1689": "AI Act",
+    "2022/2555": "NIS 2",
+    "2024/2847": "Cyber Resilience Act",
+    "2023/2854": "Data Act",
+    "2022/868": "Data Governance Act",
+    "2022/2065": "DSA (services numériques)",
+    "2022/1925": "DMA (marchés numériques)",
+    "2024/1183": "eIDAS 2",
+    "2019/1937": "Lanceurs d'alerte",
+    "2023/970": "Transparence salariale",
+    "2019/882": "Accessibilité (EAA)",
+    "2022/2464": "CSRD",
+    "2020/852": "Taxonomie",
+    "2024/1760": "CSDDD (devoir de vigilance)",
+    "2024/1781": "Écoconception (ESPR)",
+    "2023/1542": "Batteries",
+    "1907/2006": "REACH",
+    "2023/1230": "Machines",
+    "2023/988": "Sécurité générale des produits (GPSR)",
+    "2024/2853": "Responsabilité du fait des produits",
+    "2017/745": "Dispositifs médicaux (MDR)",
+    "2017/746": "Diagnostic in vitro (IVDR)",
+    # Financial services
     "2014/65": "MiFID II",
     "600/2014": "MiFIR",
     "648/2012": "EMIR",
     "2019/834": "EMIR Refit",
     "2022/2554": "DORA",
     "2019/2088": "SFDR",
-    "2020/852": "Taxonomie",
-    "2022/2464": "CSRD",
     "596/2014": "MAR (abus de marché)",
     "2014/57": "MAD II",
     "1286/2014": "PRIIPs",
@@ -31,7 +54,6 @@ KNOWN_ACTS: dict[str, str] = {
     "2015/849": "LCB-FT (4e directive anti-blanchiment)",
     "2018/843": "LCB-FT (5e directive anti-blanchiment)",
     "2024/1624": "AMLR (règlement anti-blanchiment)",
-    "2016/679": "RGPD",
     "2017/1129": "Prospectus",
     "575/2013": "CRR",
     "2013/36": "CRD IV",
@@ -44,7 +66,6 @@ KNOWN_ACTS: dict[str, str] = {
     "2016/1011": "Benchmarks (BMR)",
     "2015/2365": "SFTR",
     "2017/2402": "Titrisation (STS)",
-    "2024/1689": "AI Act",
 }
 
 # Case-sensitive on purpose: official titles are upper-case and open the document, so

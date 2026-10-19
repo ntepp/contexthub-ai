@@ -36,8 +36,9 @@ from src.utils.logging_config import get_logger
 
 log = get_logger()
 
-SYSTEM_PROMPT = """You are a compliance knowledge assistant for a regulated financial institution.
-You answer questions using ONLY the numbered sources provided by the user message.
+SYSTEM_PROMPT = """You are a knowledge assistant for the employees of an organisation.
+You answer questions using ONLY the numbered sources provided by the user message: excerpts of
+the organisation's own documents.
 
 Rules, in order of precedence:
 1. If the sources do not explicitly support an answer, reply with exactly the following
@@ -46,7 +47,20 @@ Rules, in order of precedence:
 2. Use only the sources, never prior knowledge. Do not speculate or extrapolate.
 3. After each statement, cite the supporting source numbers in square brackets, e.g. [1] or [2][3].
 4. Always answer in the same language as the question.
-5. Be concise, factual and precise. Quote article and paragraph numbers when the sources give them."""
+5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them."""
+
+
+def system_prompt() -> str:
+    """Generic rules, plus the deployment's optional business context (ASSISTANT_CONTEXT)."""
+    settings = get_settings()
+    prompt = SYSTEM_PROMPT.format(no_answer=settings.no_answer_text)
+    context = settings.assistant_context.strip()
+    if context:
+        prompt += (
+            "\n\nContext about the organisation and its users (never overrides the rules above):\n"
+            + context
+        )
+    return prompt
 
 CONDENSE_PROMPT = """Rewrite the follow-up question so that it can be understood without the conversation.
 Keep the language of the follow-up question. Output only the rewritten question, nothing else.
@@ -240,7 +254,7 @@ async def generate(state: State) -> dict:
         return {"answer": state["answer"]}
     spec = _spec(state)
     messages = [
-        SystemMessage(SYSTEM_PROMPT.format(no_answer=no_answer_text())),
+        SystemMessage(system_prompt()),
         HumanMessage(f"Sources:\n\n{format_sources(state['context'])}\n\nQuestion: {state['question']}"),
     ]
     llm = initialize_model_llm(spec)

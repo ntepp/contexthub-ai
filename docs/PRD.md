@@ -1,21 +1,22 @@
-# PRD — ContextHub AI v1 (édition commerciale)
+# PRD — ContextHub AI v1
 
 | | |
 |---|---|
 | **Statut** | v1.0 — implémentée, en recette (branche `feature/commercial-v1`) |
 | **Auteur** | ntepp |
 | **Dernière mise à jour** | 2026-10-14 |
-| **Licence produit** | Open-core : AGPL-3.0 + licence commerciale |
+| **Licence produit** | MIT (open source) ; revenus par les services et le support |
 
 ---
 
 ## 1. Résumé
 
-ContextHub AI est un **assistant documentaire souverain** pour les équipes conformité, juridique et risques
-des acteurs financiers français. Il répond aux questions des collaborateurs **uniquement à partir des
-documents de l'entreprise** (réglementation, procédures internes, politiques), cite systématiquement
-ses sources (document, page, article), **refuse de répondre** quand le corpus ne contient pas
-l'information, et **journalise chaque échange** pour l'audit.
+ContextHub AI est un **assistant documentaire souverain et générique** pour les entreprises et
+les organisations, quel que soit leur secteur. Il répond aux questions des collaborateurs
+**uniquement à partir des documents de l'entreprise** (procédures, politiques internes, contrats,
+documentation technique, réglementation), cite systématiquement ses sources (document, page,
+section), **refuse de répondre** quand le corpus ne contient pas l'information, et **journalise
+chaque échange** pour l'audit.
 
 Il s'installe **chez le client** (on-premise, une instance par client). Le LLM peut être 100 % local
 (Ollama) ou, si le client le choisit, un fournisseur cloud (Anthropic, OpenAI, Mistral ou tout
@@ -23,28 +24,45 @@ endpoint compatible OpenAI).
 
 ## 2. Problème
 
-- Les équipes conformité passent un temps considérable à retrouver la bonne disposition dans des
-  corpus volumineux (MiFID II : ~150 pages ; MiFIR, EMIR, règlements délégués, doctrine AMF, procédures
-  internes).
+- Les collaborateurs passent un temps considérable à retrouver la bonne information dans une
+  documentation volumineuse et dispersée : RH (convention collective, accords), IT (procédures,
+  base de connaissances), juridique (contrats), qualité (normes, modes opératoires), commercial
+  (offres, fiches produits), conformité (réglementation). Les experts de chaque fonction répondent
+  sans cesse aux mêmes questions.
 - Les assistants IA grand public sont **inutilisables** dans ce contexte :
-  1. les données ne peuvent pas sortir de l'entreprise (secret professionnel, RGPD, politique sécurité, DORA) ;
+  1. les données ne peuvent pas sortir de l'entreprise (secret des affaires, RGPD, politique de sécurité, obligations sectorielles) ;
   2. ils **inventent** des réponses plausibles — inacceptable quand la réponse engage la responsabilité ;
   3. ils ne laissent **aucune trace auditable** de ce qui a été demandé et répondu.
 - La recherche plein texte classique ne comprend pas les questions en langage naturel.
 
 ## 3. Cible
 
-**Segment prioritaire** : conformité / finance en France.
+**Produit horizontal** : toute entreprise ou organisation francophone (PME, ETI, grands groupes,
+secteur public) qui veut interroger ses propres documents sans les confier à un service grand
+public. Le produit ne contient aucune logique propre à un métier ; l'adaptation passe par la
+configuration (collections, droits, contexte métier `ASSISTANT_CONTEXT`, modèle).
 
 | Persona | Rôle | Besoin principal |
 |---|---|---|
-| **Camille, analyste conformité** | Utilisatrice quotidienne | Réponse rapide, sourcée, vérifiable en un clic |
-| **Responsable conformité (RCCI / RCSI)** | Sponsor, valideur | Fiabilité mesurée, refus plutôt qu'invention, traçabilité |
+| **Collaborateur** (RH, support, juriste, technicien, commercial…) | Utilisateur quotidien | Réponse rapide, sourcée, vérifiable en un clic |
+| **Responsable de fonction** (DRH, responsable support, qualité, conformité…) | Sponsor, propriétaire d'une collection | Fiabilité, refus plutôt qu'invention, moins de sollicitations répétitives |
 | **RSSI / DSI** | Décideur technique | Données qui ne sortent pas, SSO, droits, journal d'audit, installation maîtrisée |
 | **Administrateur ContextHub** | Exploitant | Gestion des utilisateurs, des collections, des sauvegardes |
 
-Clients types : sociétés de gestion, banques privées, entreprises d'investissement, cabinets de conseil
-réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur public.
+Cas d'usage types :
+
+| Fonction | Corpus |
+|---|---|
+| Ressources humaines | Convention collective, accords d'entreprise, règlement intérieur, guides RH |
+| Support et IT | Procédures, base de connaissances, documentation produit, PSSI |
+| Juridique et achats | Contrats, conditions générales, politiques |
+| Qualité, industrie, santé | Normes, modes opératoires, fiches techniques |
+| Commercial et avant-vente | Offres, fiches produits, réponses à appels d'offres |
+| Conformité, risques, finance | Réglementation européenne et nationale, doctrine, procédures de contrôle |
+
+Les secteurs où la traçabilité est une obligation (finance, santé, énergie, secteur public) sont
+les plus sensibles à l'argument souveraineté + audit ; ils servent de premières références, sans
+que le produit leur soit réservé.
 
 ## 4. Proposition de valeur
 
@@ -52,7 +70,8 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 2. **Ancrage vérifiable** — chaque affirmation est rattachée à une source numérotée `[n]`, ouvrable à la page exacte.
 3. **Refus explicite** — si les sources ne couvrent pas la question, réponse standard de refus, sans appel au LLM quand rien n'est pertinent.
 4. **Auditabilité** — journal d'audit horodaté, chaîné (inviolabilité vérifiable), exportable.
-5. **Qualité mesurée** — banc d'évaluation reproductible sur jeu de référence (MiFID) livré avec le produit.
+5. **Générique** — aucun métier codé en dur : un même produit pour les RH, l'IT, le juridique, la qualité, la conformité.
+6. **Open source (MIT)** — code auditable par le client, sans dépendance à un éditeur.
 
 ## 5. Périmètre v1
 
@@ -76,8 +95,8 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 | DOC-1 | Import PDF, DOCX, TXT, Markdown, HTML ; ingestion asynchrone avec progression | Must |
 | DOC-2 | OCR des pages sans couche texte (Tesseract, français + anglais) | Should |
 | DOC-3 | Déduplication par empreinte SHA-256 au sein d'une collection | Must |
-| DOC-4 | Découpage tenant compte de la structure (Titre / Chapitre / Section / Article) | Must |
-| DOC-10 | Reconnaissance des actes européens et de leur nom d'usage (MiFID II, EMIR, DORA…) | Should |
+| DOC-4 | Découpage tenant compte de la structure : titres Word et Markdown, Titre / Chapitre / Section / Article | Must |
+| DOC-10 | Reconnaissance des actes européens et de leur nom d'usage, transverses (RGPD, AI Act, NIS 2…) et sectoriels (MiFID II, DORA…) | Should |
 | DOC-5 | Suppression d'un document (fichier, vecteurs, métadonnées) | Must |
 | DOC-6 | Suppression d'une collection complète | Must |
 | DOC-7 | Ingestion idempotente : un retry ne crée jamais de doublons | Must |
@@ -97,6 +116,7 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 | QA-8 | Réponses en streaming | Must |
 | QA-9 | Retour utilisateur 👍 / 👎 sur chaque réponse | Should |
 | QA-10 | Re-ranking optionnel (cross-encoder) | Could |
+| QA-11 | Contexte métier configurable par instance (`ASSISTANT_CONTEXT`), sans jamais lever les règles d'ancrage | Should |
 
 #### Fournisseurs LLM (LLM)
 | ID | Exigence | Priorité |
@@ -153,18 +173,26 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 ## 6. Parcours clés
 
 1. **Installation** — le DSI clone le dépôt, remplit `.env` (secrets), lance `docker compose up -d` ; un administrateur est créé au premier démarrage.
-2. **Mise en place** — l'admin configure le SSO, crée les collections (« Réglementation UE », « Procédures internes »), donne les droits.
-3. **Alimentation** — un éditeur dépose les PDF ; suit la progression ; les doublons sont refusés.
-4. **Usage** — l'analyste pose une question, lit la réponse en streaming, clique sur `[2]` pour vérifier la page citée ; pose une question de suivi.
-5. **Contrôle** — le RCCI exporte le journal d'audit du mois et vérifie l'intégrité de la chaîne.
+2. **Mise en place** — l'admin configure le SSO, crée une collection par fonction (« RH », « Support IT », « Contrats »), donne les droits à chaque équipe.
+3. **Alimentation** — un éditeur de chaque équipe dépose ses documents ; suit la progression ; les doublons sont refusés.
+4. **Usage** — un collaborateur pose une question, lit la réponse en streaming, clique sur `[2]` pour vérifier la page citée ; pose une question de suivi.
+5. **Contrôle** — le responsable de la fonction ou le RSSI exporte le journal d'audit du mois et vérifie l'intégrité de la chaîne.
 6. **Mesure** — avant mise en production, l'intégrateur lance le banc d'évaluation sur le corpus du client.
 
 ## 7. Modèle commercial
 
-- **Édition communautaire** (AGPL-3.0) : code complet, auto-hébergement, sans support.
-- **Licence commerciale** : pour les clients qui ne veulent pas des obligations AGPL (modifications non publiées, intégration dans un produit propriétaire), avec support, mises à jour et assistance à l'installation.
-- **Services** : installation, évaluation sur le corpus client, paramétrage, formation.
-- Contributions externes soumises à un CLA (nécessaire pour conserver la double licence).
+Le code est sous **licence MIT** : libre d'usage, de modification et d'intégration, y compris
+dans un produit propriétaire. La valeur vendue est l'expertise et l'engagement, pas le droit
+d'utiliser le logiciel :
+
+- **Installation et mise en service** : déploiement chez le client, SSO, sauvegardes, dimensionnement GPU.
+- **Évaluation et paramétrage** sur le corpus du client : jeu de questions avec ses experts, réglage de la recherche, choix du modèle.
+- **Contrat de support** annuel : délais d'intervention garantis, mises à jour, correctifs de sécurité prioritaires.
+- **Développements sur mesure** : connecteurs, intégrations, adaptations métier.
+- **Formation** des administrateurs et des utilisateurs.
+
+Risque assumé : un concurrent peut réutiliser le code. La différenciation repose sur la qualité
+du service, la connaissance du produit et la relation client.
 
 ## 8. Indicateurs de succès
 
@@ -180,9 +208,10 @@ réglementaire, assureurs. Segments suivants (hors v1) : juridique, secteur publ
 
 | Risque | Mitigation |
 |---|---|
-| Qualité insuffisante d'un modèle 8B local sur du français juridique | Banc d'évaluation ; option modèle plus grand ou cloud ; recherche hybride + découpage par article |
-| Responsabilité en cas de réponse erronée | Citations obligatoires, refus explicite, mention « aide à la recherche, ne constitue pas un avis juridique » |
-| Historique public sous MIT avant le passage AGPL | Les versions antérieures restent sous MIT ; la valeur commerciale porte sur la v1 (auth, audit, admin) |
+| Qualité insuffisante d'un modèle 8B local sur des documents spécialisés | Banc d'évaluation sur le corpus du client ; option modèle plus grand ou cloud ; recherche hybride + découpage par section |
+| Responsabilité en cas de réponse erronée | Citations obligatoires, refus explicite, mention « vérifiez les sources citées » dans l'interface |
+| Code MIT réutilisable par un concurrent | Valeur portée par les services, le support et l'expertise ; rythme de mises à jour |
+| Produit générique perçu comme « un RAG de plus » | Arguments différenciants : souveraineté, refus explicite mesuré, citations à la page, audit chaîné, droits par collection |
 | Matériel GPU absent chez le client | Mode fournisseur cloud ou endpoint compatible OpenAI interne |
 
 ## 10. Qualité mesurée
@@ -205,7 +234,8 @@ affiché aux utilisateurs (décision issue de la mesure).
 
 | Domaine | Statut | Détail |
 |---|---|---|
-| Licence AGPL + commerciale | ✅ | `LICENSE`, `COMMERCIAL-LICENSE.md`, CLA dans `CONTRIBUTING.md`, lien source AGPL §13 dans l'interface |
+| Licence MIT | ✅ | `LICENSE`, `CONTRIBUTING.md` (contributions sous MIT) |
+| Positionnement générique | ✅ | Prompt système neutre, contexte métier configurable (`ASSISTANT_CONTEXT`), textes européens transverses reconnus (RGPD, AI Act, NIS 2, Data Act, CSRD…) |
 | Configuration centralisée | ✅ | `src/config.py`, garde-fous de production, traçage externe désactivé par défaut |
 | AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
 | DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
@@ -228,9 +258,10 @@ affiché aux utilisateurs (décision issue de la mesure).
 
 | Priorité | Action | Responsable |
 |---|---|---|
-| 🔴 | Faire relire licence commerciale, CLA, CGV et DPA par un avocat (dépôt public : publication AGPL assumée) | Fondateur |
+| 🔴 | Faire rédiger CGV, contrat de support et DPA (sous-traitance RGPD) par un avocat | Fondateur |
+| 🟠 | Constituer un jeu de référence hors finance (RH ou IT) pour démontrer le caractère générique | Produit |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
-| 🟠 | Étendre le jeu de référence à 100 questions (avec un expert conformité) ; atteindre ≥ 0,80 de score sémantique | Produit |
+| 🟠 | Étendre le jeu de référence à 100 questions (avec des experts métier) ; atteindre ≥ 0,80 de score sémantique | Produit |
 | 🟠 | Découper les articles de définitions point par point ; décomposer les questions multi-textes ; mesurer le re-classement | Technique |
 | 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
 | 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |

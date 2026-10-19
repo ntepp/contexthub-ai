@@ -1,21 +1,8 @@
 # Contribuer à ContextHub AI
 
-Merci de votre intérêt. ContextHub est publié sous double licence (AGPL-3.0 et commerciale,
-voir [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
-
-## Contrat de licence de contributeur (CLA)
-
-Avant qu'une contribution puisse être fusionnée, son auteur accepte, en l'indiquant dans la
-description de la pull request (« J'accepte le CLA de ContextHub ») :
-
-1. qu'il est l'auteur de la contribution, ou qu'il a le droit de la soumettre ;
-2. qu'il concède au mainteneur du projet une licence mondiale, non exclusive, gratuite,
-   irrévocable, d'utiliser, modifier, sous-licencier et distribuer la contribution, **y compris
-   sous une licence commerciale** ;
-3. que la contribution reste par ailleurs disponible sous AGPL-3.0.
-
-Sans ce contrat, une contribution ne pourrait être redistribuée que sous AGPL, ce qui rendrait
-la licence commerciale impossible.
+Merci de votre intérêt. ContextHub est publié sous [licence MIT](LICENSE) : en ouvrant une pull
+request, vous acceptez que votre contribution soit distribuée sous cette même licence, et vous
+confirmez en être l'auteur ou avoir le droit de la soumettre.
 
 ## Développement
 

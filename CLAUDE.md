@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Product
 
-ContextHub AI v1: on-prem, single-tenant RAG assistant sold to compliance / finance teams in France.
-Open-core (AGPL-3.0 + commercial licence). Product requirements and implementation status live in
+ContextHub AI v1: on-prem, single-tenant RAG assistant for any company's internal documents (HR, IT,
+legal, quality, compliance…). Generic: no business logic hard-coded; per-deployment context goes in
+`ASSISTANT_CONTEXT`. MIT licence; revenue comes from services and support. Product requirements and implementation status live in
 `docs/PRD.md` — update its "Suivi d'implémentation" section when a feature lands.
 
 ## Commands
@@ -39,7 +40,7 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
 | `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`) |
-| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (MiFID II/EMIR… recognition), `chunking` (Titre/Chapitre/Article), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → generate`; `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |

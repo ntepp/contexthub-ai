@@ -118,7 +118,7 @@ export function Login() {
               <>
                 {', '}
                 <a className="underline hover:text-slate" href={config.source_code_url} target="_blank" rel="noreferrer">
-                  code source sous licence AGPL-3.0
+                  code source (licence MIT)
                 </a>
               </>
             )}

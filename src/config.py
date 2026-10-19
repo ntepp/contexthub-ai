@@ -33,8 +33,7 @@ class Settings(BaseSettings):
     log_format: Literal["text", "json"] = "text"
     # Public URL of the frontend, used for OIDC redirects and CORS.
     public_url: str = "http://localhost:5173"
-    # AGPL-3.0 §13: users interacting over a network must be offered the source. Leave
-    # empty only under a commercial licence.
+    # Link to the source code shown on the login page; empty hides it.
     source_code_url: str = "https://github.com/ntepp/contexthub-ai"
     cors_origins: str = ""
 
@@ -130,6 +129,9 @@ class Settings(BaseSettings):
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     history_turns: int = 4
     no_answer_text: str = DEFAULT_NO_ANSWER
+    # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH
+    # d'ACME ; les documents sont la convention collective et les accords d'entreprise."
+    assistant_context: str = ""
 
     # ------------------------------------------------------------------ retention
     audit_retention_days: int = 0  # 0 = keep forever

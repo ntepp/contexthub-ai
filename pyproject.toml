@@ -1,8 +1,8 @@
 [project]
 name = "contexthub-ai"
 version = "1.0.0"
-description = "Assistant documentaire souverain pour la conformité (RAG on-premise)"
-license = { text = "AGPL-3.0-only OR LicenseRef-ContextHub-Commercial" }
+description = "Assistant documentaire souverain pour l'entreprise (RAG on-premise)"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 
 [tool.ruff]

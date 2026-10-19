@@ -15,6 +15,11 @@ def test_recognises_directive():
     assert act.official == "Directive 2014/65/UE" and act.alias == "MiFID II"
 
 
+def test_recognises_cross_sector_act():
+    act = detect_act("DIRECTIVE (UE) 2022/2555 DU PARLEMENT EUROPÉEN ET DU CONSEIL du 14 décembre 2022")
+    assert act.official == "Directive 2022/2555/UE" and act.alias == "NIS 2"
+
+
 def test_unknown_act_keeps_official_reference():
     act = detect_act("RÈGLEMENT DÉLÉGUÉ (UE) 2017/565 DE LA COMMISSION du 25 avril 2016")
     assert act.official == "Règlement délégué (UE) n° 2017/565" and act.alias is None

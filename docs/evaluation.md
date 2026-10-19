@@ -6,6 +6,10 @@ et **empêcher les régressions** à chaque modification du pipeline.
 
 ## Jeu de référence
 
+Le banc ne dépend d'aucun métier : un jeu de référence est un fichier JSON de questions et de
+réponses attendues, à constituer sur n'importe quel corpus (RH, IT, contrats…). Le jeu livré
+sert de démonstration, sur un corpus public et exigeant.
+
 `eval/datasets/golden_mifid.json` (v0.2) : 18 questions sur trois textes EUR-Lex en français —
 MiFID II (directive 2014/65/UE), MiFIR (règlement 600/2014), EMIR (règlement 648/2012), soit
 272 pages. Réponses de référence vérifiées ligne à ligne dans les PDF.

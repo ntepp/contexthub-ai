@@ -253,8 +253,8 @@ export function Chat() {
               </button>
             </div>
             <p className="mt-2 text-xs text-faint">
-              Outil d'aide à la recherche documentaire. Vérifiez les sources citées ; une réponse ne constitue pas un avis
-              juridique.
+              Outil d'aide à la recherche documentaire. Vérifiez les sources citées avant de vous appuyer sur une
+              réponse.
             </p>
           </div>
         </div>

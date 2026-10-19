@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from src.config import get_settings
-from src.rag.rag_pipeline import cited_indices, is_refusal
+from src.config import get_settings, reset_settings_cache
+from src.rag.rag_pipeline import cited_indices, is_refusal, system_prompt
 from tests.conftest import grant, upload
 from tests.fakes import is_condense_prompt, make_pdf
 
@@ -16,6 +16,19 @@ PDF = make_pdf(
     ]
 )
 QUESTION = "A partir de quelle date les Etats membres appliquent ces dispositions ?"
+
+
+def test_system_prompt_is_generic_and_takes_business_context(monkeypatch):
+    assert "financ" not in system_prompt().lower()
+    monkeypatch.setenv("ASSISTANT_CONTEXT", "Tu assistes les équipes RH d'ACME.")
+    reset_settings_cache()
+    try:
+        prompt = system_prompt()
+        assert prompt.endswith("Tu assistes les équipes RH d'ACME.")
+        assert get_settings().no_answer_text in prompt
+    finally:
+        monkeypatch.delenv("ASSISTANT_CONTEXT")
+        reset_settings_cache()
 
 
 @pytest.fixture

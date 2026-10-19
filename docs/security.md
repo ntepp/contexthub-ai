@@ -132,4 +132,4 @@ d'impact l'exige, réduisez `AUDIT_RETENTION_DAYS`.
 ## 10. Signaler une vulnérabilité
 
 Écrivez à ntepp.marcus@gmail.com ; n'ouvrez pas d'issue publique.
-Réponse sous 5 jours ouvrés ; correctif prioritaire pour les clients sous licence commerciale.
+Réponse sous 5 jours ouvrés ; correctif prioritaire pour les clients sous contrat de support.
