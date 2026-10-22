@@ -206,7 +206,8 @@ def parse_plan(reply: str, question: str, max_queries: int) -> list[str]:
     ``max_queries`` planned sub-queries.
 
     Anything unusable (no JSON, wrong shape) falls back to the question alone: planning
-    can only widen retrieval, never break it.
+    can only widen retrieval, never break it. So does a plan with a single sub-query:
+    that is a paraphrase, not a split, and searching it again only crowds the context.
     """
     queries = [question]
     match = _JSON_OBJECT_RE.search(reply or "")
@@ -228,7 +229,7 @@ def parse_plan(reply: str, question: str, max_queries: int) -> list[str]:
         queries.append(" ".join(item.split()))
         if len(queries) - 1 >= max_queries:
             break
-    return queries
+    return queries if len(queries) >= 3 else [question]
 
 
 def interleave(ranked: Sequence[Sequence[RetrievedChunk]], limit: int) -> list[RetrievedChunk]:

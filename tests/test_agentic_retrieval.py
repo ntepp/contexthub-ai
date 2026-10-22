@@ -52,6 +52,12 @@ def test_parse_plan_falls_back_to_the_question():
         assert parse_plan(reply, "Q", max_queries=3) == ["Q"]
 
 
+def test_a_single_planned_query_is_a_paraphrase_not_a_split():
+    # Seen with gpt-4o on "Combien de jours de congé pour son mariage ?": one reworded query.
+    assert parse_plan('{"queries": ["Nombre de jours de congé pour un mariage"]}', "Q", max_queries=3) == ["Q"]
+    assert parse_plan('{"queries": ["Q", "q"]}', "Q", max_queries=3) == ["Q"]
+
+
 def test_interleave_gives_every_search_a_place():
     a1, a2, a3, b1, c1 = (_chunk(n) for n in ("a1", "a2", "a3", "b1", "c1"))
     assert interleave([[a1, a2, a3], [a1, b1], [c1]], limit=4) == [a1, c1, a2, b1]
