@@ -45,7 +45,7 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (backoff on transient errors only) + nightly `purge_expired` |
-| `eval/` | Golden dataset, metrics, reporter, runner |
+| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, pages: Chat, KnowledgeBase, Account, admin/* |
 
 ## Invariants — do not break

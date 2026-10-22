@@ -150,6 +150,7 @@ que le produit leur soit réservé.
 | EVAL-1 | Banc d'évaluation CLI sur jeu de référence JSON | Must |
 | EVAL-2 | Métriques : exactitude du refus, score sémantique, taux de récupération de la bonne source, latence, calibration du score de pertinence | Must |
 | EVAL-3 | Rapports JSON + CSV horodatés | Must |
+| EVAL-4 | Jeu de référence hors finance livré avec son corpus (RH, Service-Public.fr), pour démontrer le caractère générique | Should |
 
 ### 5.2 Exigences non fonctionnelles
 
@@ -249,6 +250,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | AUD-1 à AUD-5 | ✅ | Journal chaîné SHA-256, vérification (UI + CLI), export CSV, rétention, effacement RGPD sans rupture de chaîne |
 | ADM-1 à ADM-3 | ✅ | Utilisateurs, accès par collection, état du système et flux de données |
 | EVAL-1 à EVAL-3 | ✅ | `eval/`, métriques dont calibration, rapports JSON + CSV |
+| EVAL-4 Jeu RH | ✅ | `eval/datasets/golden_rh.json` (20 questions dont 5 pièges), instantané `eval/corpora/rh` (Etalab 2.0), outil de rafraîchissement `eval/tools/fetch_service_public.py`, indexation automatique du corpus ; « bon article » étendu aux titres de section |
 | NFR-1 Sécurité | ✅ | Voir `docs/security.md` |
 | NFR-2 Confidentialité | ✅ | Mode 100 % local vérifié ; polices auto-hébergées, CSP sans ressource externe |
 | NFR-3 Installation | ✅ | `docker compose up -d` testé de bout en bout (build, migrations, nginx, indexation, streaming SSE) |
@@ -263,7 +265,6 @@ affiché aux utilisateurs (décision issue de la mesure).
 | Priorité | Action | Responsable |
 |---|---|---|
 | 🔴 | Faire rédiger CGV, contrat de support et DPA (sous-traitance RGPD) par un avocat | Fondateur |
-| 🟠 | Constituer un jeu de référence hors finance (RH ou IT) pour démontrer le caractère générique | Produit |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
 | 🟠 | Étendre le jeu de référence à 100 questions (avec des experts métier) ; atteindre ≥ 0,80 de score sémantique | Produit |
 | 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) | Technique |
@@ -279,5 +280,5 @@ Une évolution = une branche `feature/<nom>` issue de `master`, une pull request
 |---|---|---|
 | Recherche agentique (QA-12) | `feature/agentic-retrieval` | ✅ Livrée — mesures en §10 |
 | Découpage des définitions point par point (DOC-11) | `feature/definition-chunking` | ✅ Livrée — mesures en §10 |
-| Jeu de référence RH (démonstration hors finance) | `feature/hr-golden-dataset` | À faire |
+| Jeu de référence RH (EVAL-4) | `feature/hr-golden-dataset` | ✅ Livrée — mesures en §10 |
 | Connecteurs documentaires (SharePoint, Confluence…) | `feature/document-connectors` | À cadrer avant développement |

@@ -46,7 +46,8 @@ and an employee only queries what they are allowed to read.
 | **Fits your business** | Configurable business context (`ASSISTANT_CONTEXT`); EU legal acts (GDPR, AI Act, NIS 2, CSRD, MiFID II…) recognised by their common names. |
 
 The user interface is in French; answers come in the language of the question. Answer quality
-can be measured on your own corpus with the bundled evaluation harness
+can be measured on your own corpus with the bundled evaluation harness, which ships with
+two reference sets: French employment law (HR) and EU financial regulation
 ([docs/evaluation.md](docs/evaluation.md)).
 
 ## Architecture

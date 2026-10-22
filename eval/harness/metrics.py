@@ -5,7 +5,8 @@ Metrics
 - over_refusal: refusal on an answerable question (lost recall)
 - semantic_score: cosine similarity of bge-m3 embeddings (answer vs ground truth)
 - retrieval_hit: every expected document appears among the returned sources
-- article_hit: the expected article appears in a *cited* source's section
+- article_hit: the expected article ("Article 2") — or, for corpora without articles, the
+  expected section title ("Décès d'un proche") — appears in a *cited* source's section path
 - calibration: mean retrieval confidence of passing vs failing answers — if they are
   not separated, the confidence shown in the UI carries no information
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -55,17 +57,30 @@ def _article_numbers(text: str | None) -> set[str]:
     return numbers
 
 
+def _fold(text: str) -> str:
+    """Case-, accent- and apostrophe-insensitive form for comparing section titles."""
+    ascii_text = unicodedata.normalize("NFKD", text.replace("’", "'")).encode("ascii", "ignore").decode()
+    return " ".join(ascii_text.lower().split())
+
+
 def article_hit(sources: list[dict], reference_article: str | None) -> bool | None:
-    expected = _article_numbers(reference_article)
-    if not expected:
+    if not reference_article:
         return None
     cited = [s for s in sources if s.get("cited")] or sources
-    found = set()
-    for source in cited:
-        found |= _article_numbers(source.get("section"))
-        for part in source.get("section_path") or []:
-            found |= _article_numbers(part)
-    return bool(expected & found)
+    expected = _article_numbers(reference_article)
+    if expected:
+        found = set()
+        for source in cited:
+            found |= _article_numbers(source.get("section"))
+            for part in source.get("section_path") or []:
+                found |= _article_numbers(part)
+        return bool(expected & found)
+    # No article number: the reference is a section title, matched inside the path.
+    wanted = _fold(reference_article)
+    return any(
+        wanted in _fold(" › ".join([*(source.get("section_path") or []), source.get("section") or ""]))
+        for source in cited
+    )
 
 
 @dataclass
