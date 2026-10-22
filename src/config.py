@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     embed_batch_size: int = 32
     chunk_size: int = 1200
     chunk_overlap: int = 150
+    # One chunk per definition in definition articles and glossaries (see chunking.py).
+    chunk_definitions: bool = True
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
 

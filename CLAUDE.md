@@ -40,7 +40,7 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
 | `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`) |
-| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |

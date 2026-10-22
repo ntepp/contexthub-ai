@@ -92,7 +92,13 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
     act = detect_act(loaded.pages[0].text) if loaded.pages else None
     if act is not None:
         log.info("[ingestion] texte reconnu : %s", act.label)
-    chunks = chunk_pages(loaded.pages, settings.chunk_size, settings.chunk_overlap, act.label if act else None)
+    chunks = chunk_pages(
+        loaded.pages,
+        settings.chunk_size,
+        settings.chunk_overlap,
+        act.label if act else None,
+        split_definitions=settings.chunk_definitions,
+    )
     if not chunks:
         raise IngestionError(
             "Aucun texte exploitable dans ce document"

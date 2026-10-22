@@ -7,6 +7,12 @@ only sections longer than ``chunk_size`` are split further. Each chunk records t
 page it starts on and its heading path, which is also prepended to the indexed
 text so that both the embedding and the full-text index "know" which article a
 passage belongs to.
+
+Definition sections ("Article 2 — Définitions", a glossary…) are split one
+definition per chunk: a list of thirty definitions cut every 1 200 characters buries
+each term among unrelated ones, and the passage holding "contrepartie financière"
+never ranks. Each definition chunk repeats the introductory sentence ("Aux fins du
+présent règlement, on entend par :") and carries the term in its heading path.
 """
 
 from __future__ import annotations
@@ -33,6 +39,14 @@ _HEADINGS: list[tuple[int, re.Pattern[str]]] = [
     (6, re.compile(r"^(?P<kind>Article|ARTICLE)\s+(?P<num>\d+(?:\s?(?:bis|ter|quater|[a-z]))?|premier|1er)" + _TAIL)),
 ]
 _MARKDOWN = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<title>.{1,200})$")
+
+_DEFINITIONS_TITLE = re.compile(r"d[ée]finitions?|glossaire|lexique|terminologie|vocabulaire", re.IGNORECASE)
+_DEFINITIONS_INTRO = re.compile(r"on entend par|au sens d[eu]|signifient?\s*:|désigne(?:nt)?\s*:|means\s*:", re.IGNORECASE)
+# "8) «contrepartie financière», une entreprise…" / "12. « Salarié » : …" — not "7), de ladite".
+_NUMBERED_ITEM = re.compile(r"^(?P<num>\d{1,3})\s*[).]\s+(?P<rest>\S.*)$")
+# "- **Astreinte** : période…" / "• Forfait jours : …"
+_BULLET_ITEM = re.compile(r"^[-•*]\s+(?P<rest>\S.*)$")
+_TERM = re.compile(r"^(?:\*\*(?P<bold>[^*]{1,80})\*\*|[«\"“]\s*(?P<quoted>[^»\"”]{1,80}?)\s*[»\"”]|(?P<plain>[^:,;]{1,60})\s*:)")
 
 
 def detect_heading(line: str) -> tuple[int, str, bool] | None:
@@ -124,8 +138,108 @@ def _sections(pages: list[PageText]) -> list[_Section]:
     return sections
 
 
+Lines = list[tuple[str, int | None]]
+
+
+def _term_label(text: str) -> str | None:
+    match = _TERM.match(text)
+    if not match:
+        return None
+    term = (match.group("bold") or match.group("quoted") or match.group("plain") or "").strip(" *«»\"“”")
+    return term or None
+
+
+def definition_items(section: _Section) -> tuple[Lines, list[tuple[str, Lines]]] | None:
+    """(introductory lines, [(label, lines)]) when ``section`` is a list of definitions.
+
+    An item names its term («…», **…** or "Terme :") and is numbered "1)", "2)"…
+    (numbering starts at 1 and increases by one, so neither the paragraph number
+    "1. Aux fins de…" nor a wrapped "7), de ladite directive" starts an item) or
+    bulleted "- **Terme** : …". Sub-items ("a)", "i)") stay with their definition. ``None`` when
+    the section is not a definitions list or holds fewer than two definitions.
+    """
+    title = section.path[-1] if section.path else ""
+    body = list(section.lines)
+    if section.level is not None and body:
+        body = body[1:]  # the heading line itself
+        if body and title.endswith(f" — {body[0][0]}"):
+            body = body[1:]  # the title that followed it ("Définitions")
+    opening = " ".join(line for line, _ in body[:4])
+    if not (_DEFINITIONS_TITLE.search(title) or _DEFINITIONS_INTRO.search(opening)):
+        return None
+
+    intro: Lines = []
+    items: list[tuple[str, Lines]] = []
+    mode: str | None = None
+    expected = 1
+    for line, page in body:
+        numbered = _NUMBERED_ITEM.match(line)
+        bullet = _BULLET_ITEM.match(line)
+        label: str | None = None
+        term = _term_label(numbered.group("rest")) if numbered else None
+        if term and mode in (None, "numbered") and int(numbered.group("num")) == expected:
+            mode, expected = "numbered", expected + 1
+            label = f"{numbered.group('num')}) {term}"
+        elif bullet and mode in (None, "bullet") and _term_label(bullet.group("rest")):
+            mode = "bullet"
+            label = _term_label(bullet.group("rest"))
+        if label:
+            items.append((label, [(line, page)]))
+        elif items:
+            items[-1][1].append((line, page))
+        else:
+            intro.append((line, page))
+    return (intro, items) if len(items) >= 2 else None
+
+
+def _emit(
+    lines: Lines,
+    path: list[str],
+    splitter: RecursiveCharacterTextSplitter,
+    chunk_overlap: int,
+    doc_label: str | None,
+) -> list[Chunk]:
+    offsets: list[int] = []
+    page_numbers: list[int | None] = []
+    parts: list[str] = []
+    cursor = 0
+    for line, page_number in lines:
+        offsets.append(cursor)
+        page_numbers.append(page_number)
+        parts.append(line)
+        cursor += len(line) + 1
+    text = "\n".join(parts)
+
+    chunks: list[Chunk] = []
+    search_from = 0
+    for piece in splitter.split_text(text):
+        position = text.find(piece, max(0, search_from - chunk_overlap))
+        if position < 0:
+            position = search_from
+        search_from = position + len(piece)
+        if not is_meaningful(piece):
+            continue
+        page = page_numbers[max(0, bisect.bisect_right(offsets, position) - 1)]
+        header = " › ".join(([doc_label] if doc_label else []) + path)
+        content = f"[{header}]\n{piece}" if header else piece
+        chunks.append(
+            Chunk(
+                content=content,
+                body=piece,
+                page=page,
+                section=path[-1] if path else None,
+                section_path=list(path),
+            )
+        )
+    return chunks
+
+
 def chunk_pages(
-    pages: list[PageText], chunk_size: int = 1200, chunk_overlap: int = 150, doc_label: str | None = None
+    pages: list[PageText],
+    chunk_size: int = 1200,
+    chunk_overlap: int = 150,
+    doc_label: str | None = None,
+    split_definitions: bool = True,
 ) -> list[Chunk]:
     """``doc_label`` (e.g. "MiFID II — Directive 2014/65/UE") heads every chunk's path."""
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
@@ -133,35 +247,14 @@ def chunk_pages(
     for section in _sections(pages):
         if section.body_lines == 0:
             continue
-        offsets: list[int] = []
-        page_numbers: list[int | None] = []
-        parts: list[str] = []
-        cursor = 0
-        for line, page_number in section.lines:
-            offsets.append(cursor)
-            page_numbers.append(page_number)
-            parts.append(line)
-            cursor += len(line) + 1
-        text = "\n".join(parts)
-
-        search_from = 0
-        for piece in splitter.split_text(text):
-            position = text.find(piece, max(0, search_from - chunk_overlap))
-            if position < 0:
-                position = search_from
-            search_from = position + len(piece)
-            if not is_meaningful(piece):
-                continue
-            page = page_numbers[max(0, bisect.bisect_right(offsets, position) - 1)]
-            header = " › ".join(([doc_label] if doc_label else []) + section.path)
-            content = f"[{header}]\n{piece}" if header else piece
-            chunks.append(
-                Chunk(
-                    content=content,
-                    body=piece,
-                    page=page,
-                    section=section.path[-1] if section.path else None,
-                    section_path=list(section.path),
-                )
-            )
+        definitions = definition_items(section) if split_definitions else None
+        if definitions is None:
+            chunks.extend(_emit(section.lines, section.path, splitter, chunk_overlap, doc_label))
+            continue
+        intro, items = definitions
+        for label, item_lines in items:
+            # The introduction is repeated in every definition chunk, at the item's page.
+            item_page = item_lines[0][1]
+            lines = [(line, item_page) for line, _ in intro] + item_lines
+            chunks.extend(_emit(lines, [*section.path, label], splitter, chunk_overlap, doc_label))
     return chunks

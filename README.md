@@ -37,7 +37,7 @@ and an employee only queries what they are allowed to read.
 | **Explicit refusal** | When no relevant passage exists, ContextHub says it does not know — without even calling the model. |
 | **Agentic retrieval** | For a question that covers several topics or documents ("what is the notice period, and who approves remote work?"), the model plans one search per part and every part gets its passages. The searches run are returned by the API and logged. |
 | **Conversations** | Follow-up questions are understood ("and for managers?"); per-user history. |
-| **All your formats** | PDF (including scans, through OCR), Word, Markdown, plain text, HTML; chunking follows the document's headings and sections. |
+| **All your formats** | PDF (including scans, through OCR), Word, Markdown, plain text, HTML; chunking follows the document's headings and sections, and gives each definition of a glossary or definitions article its own passage. |
 | **Hybrid search** | Meaning (multilingual bge-m3 embeddings) and exact words (accent-insensitive French full-text) combined: finds "parental leave" as well as a part number. |
 | **Access control** | OpenID Connect SSO (Entra ID, Google, Okta, Keycloak) or local accounts, per-collection rights, API keys for integrations. |
 | **Audit trail** | Questions, answers, sources consulted, imports, permission changes: everything is logged, SHA-256 hash-chained, verifiable and exportable to CSV. |

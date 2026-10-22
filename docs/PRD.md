@@ -97,6 +97,7 @@ que le produit leur soit réservé.
 | DOC-3 | Déduplication par empreinte SHA-256 au sein d'une collection | Must |
 | DOC-4 | Découpage tenant compte de la structure : titres Word et Markdown, Titre / Chapitre / Section / Article | Must |
 | DOC-10 | Reconnaissance des actes européens et de leur nom d'usage, transverses (RGPD, AI Act, NIS 2…) et sectoriels (MiFID II, DORA…) | Should |
+| DOC-11 | Découpage des définitions : un passage par définition (articles « Définitions », glossaires, lexiques), phrase d'introduction répétée, terme dans le chemin de section | Should |
 | DOC-5 | Suppression d'un document (fichier, vecteurs, métadonnées) | Must |
 | DOC-6 | Suppression d'une collection complète | Must |
 | DOC-7 | Ingestion idempotente : un retry ne crée jamais de doublons | Must |
@@ -239,6 +240,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | Positionnement générique | ✅ | Prompt système neutre, contexte métier configurable (`ASSISTANT_CONTEXT`), textes européens transverses reconnus (RGPD, AI Act, NIS 2, Data Act, CSRD…) |
 | Configuration centralisée | ✅ | `src/config.py`, garde-fous de production, traçage externe désactivé par défaut |
 | AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
+| DOC-11 Découpage des définitions | ✅ | `definition_items()` dans `src/ingestion/chunking.py` : listes numérotées (« 8) «terme», … ») et à puces (« - **Terme** : … »), sous-points rattachés ; `CHUNK_DEFINITIONS` ; documents existants : `cli reindex` |
 | DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
 | QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
 | QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
@@ -264,7 +266,6 @@ affiché aux utilisateurs (décision issue de la mesure).
 | 🟠 | Constituer un jeu de référence hors finance (RH ou IT) pour démontrer le caractère générique | Produit |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
 | 🟠 | Étendre le jeu de référence à 100 questions (avec des experts métier) ; atteindre ≥ 0,80 de score sémantique | Produit |
-| 🟠 | Découper les articles de définitions point par point | Technique |
 | 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) | Technique |
 | 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
 | 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |
@@ -277,6 +278,6 @@ Une évolution = une branche `feature/<nom>` issue de `master`, une pull request
 | Évolution | Branche | Statut |
 |---|---|---|
 | Recherche agentique (QA-12) | `feature/agentic-retrieval` | ✅ Livrée — mesures en §10 |
-| Découpage des définitions point par point | `feature/definition-chunking` | À faire |
+| Découpage des définitions point par point (DOC-11) | `feature/definition-chunking` | ✅ Livrée — mesures en §10 |
 | Jeu de référence RH (démonstration hors finance) | `feature/hr-golden-dataset` | À faire |
 | Connecteurs documentaires (SharePoint, Confluence…) | `feature/document-connectors` | À cadrer avant développement |
