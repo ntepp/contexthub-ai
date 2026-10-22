@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     history_turns: int = 4
+    # Agentic retrieval: the LLM splits multi-part questions into up to N sub-queries,
+    # searched on top of the question (one extra LLM call per answered question;
+    # refusals stay LLM-free).
+    agentic_retrieval: bool = True
+    agentic_max_queries: int = 3
     no_answer_text: str = DEFAULT_NO_ANSWER
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH
     # d'ACME ; les documents sont la convention collective et les accords d'entreprise."

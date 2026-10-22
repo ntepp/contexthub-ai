@@ -107,6 +107,8 @@ export interface AnswerResult {
   latency_seconds: number
   model: string
   standalone_question: string
+  /** Searches actually run: the question, then the sub-queries planned by the model. */
+  search_queries: string[]
   conversation_id: string
   message_id: string
 }

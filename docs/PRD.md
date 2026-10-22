@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Statut** | v1.0 — implémentée, en recette (branche `feature/commercial-v1`) |
+| **Statut** | v1.0 livrée sur `master` (PR #2, 2026-10-19) ; évolutions livrées fonctionnalité par fonctionnalité (§13) |
 | **Auteur** | ntepp |
-| **Dernière mise à jour** | 2026-10-14 |
+| **Dernière mise à jour** | 2026-10-22 |
 | **Licence produit** | MIT (open source) ; revenus par les services et le support |
 
 ---
@@ -117,6 +117,7 @@ que le produit leur soit réservé.
 | QA-9 | Retour utilisateur 👍 / 👎 sur chaque réponse | Should |
 | QA-10 | Re-ranking optionnel (cross-encoder) | Could |
 | QA-11 | Contexte métier configurable par instance (`ASSISTANT_CONTEXT`), sans jamais lever les règles d'ancrage | Should |
+| QA-12 | Recherche agentique : le modèle décide si la question demande plusieurs recherches (une par sujet, document ou étape), les lance et fusionne les résultats de façon équilibrée ; une question sans passage pertinent reste refusée sans appel au LLM | Should |
 
 #### Fournisseurs LLM (LLM)
 | ID | Exigence | Priorité |
@@ -240,6 +241,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
 | DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
 | QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
+| QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
 | QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
 | LLM-1 à LLM-4 | ✅ | Ollama, Anthropic, OpenAI, endpoint compatible OpenAI (Mistral, vLLM) |
 | AUD-1 à AUD-5 | ✅ | Journal chaîné SHA-256, vérification (UI + CLI), export CSV, rétention, effacement RGPD sans rupture de chaîne |
@@ -262,7 +264,19 @@ affiché aux utilisateurs (décision issue de la mesure).
 | 🟠 | Constituer un jeu de référence hors finance (RH ou IT) pour démontrer le caractère générique | Produit |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
 | 🟠 | Étendre le jeu de référence à 100 questions (avec des experts métier) ; atteindre ≥ 0,80 de score sémantique | Produit |
-| 🟠 | Découper les articles de définitions point par point ; décomposer les questions multi-textes ; mesurer le re-classement | Technique |
+| 🟠 | Découper les articles de définitions point par point | Technique |
+| 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) | Technique |
 | 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
 | 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |
 | 🟡 | v1.1 : connecteurs SharePoint / Confluence, groupes SSO → droits, export du journal vers SIEM | Technique |
+
+## 13. Évolutions
+
+Une évolution = une branche `feature/<nom>` issue de `master`, une pull request, sa documentation.
+
+| Évolution | Branche | Statut |
+|---|---|---|
+| Recherche agentique (QA-12) | `feature/agentic-retrieval` | ✅ Livrée — mesures en §10 |
+| Découpage des définitions point par point | `feature/definition-chunking` | À faire |
+| Jeu de référence RH (démonstration hors finance) | `feature/hr-golden-dataset` | À faire |
+| Connecteurs documentaires (SharePoint, Confluence…) | `feature/document-connectors` | À cadrer avant développement |

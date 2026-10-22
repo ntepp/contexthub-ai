@@ -1,4 +1,4 @@
-"""Grounded question answering: condense → retrieve → generate (LangGraph).
+"""Grounded question answering: condense → retrieve → plan → generate (LangGraph).
 
 * ``condense`` rewrites a follow-up question into a standalone one using the
   conversation history (skipped on the first turn). History is used **only** for this
@@ -6,6 +6,10 @@
 * ``retrieve`` runs hybrid search, keeps chunks whose cosine **distance** is
   ``<= RETRIEVAL_MAX_DISTANCE`` (0.0 = identical, higher = worse) and short-circuits
   to the refusal sentence — without calling the LLM — when nothing qualifies.
+* ``plan`` (agentic retrieval) lets the LLM decide whether the question needs several
+  searches — one per topic, document or step — runs the extra ones and merges the
+  results so that every sub-question gets passages in the context. It only runs once
+  ``retrieve`` found something, so an unanswerable question still costs no LLM call.
 * ``generate`` answers from numbered sources and must cite them as ``[n]``. A
   refusal from the LLM is normalised to the exact ``NO_ANSWER_TEXT`` sentence and
   drops the sources, so the UI never shows citations for a non-answer.
@@ -14,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import uuid
@@ -71,7 +76,23 @@ Conversation:
 Follow-up question: {question}
 Standalone question:"""
 
+PLAN_PROMPT = """You plan the searches needed to answer a question from a document base.
+If the question asks about several distinct things (several topics, documents, rules or
+steps), write one self-contained search query per thing. Otherwise return the question
+itself as the only query.
+
+Rules:
+- At most {max_queries} queries.
+- Keep the language of the question.
+- Each query must make sense on its own: repeat the subject, never write "it" or "they".
+- Do not answer the question.
+
+Reply with JSON only, for example {{"queries": ["first search", "second search"]}}
+
+Question: {question}"""
+
 _CITATION_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def no_answer_text() -> str:
@@ -84,6 +105,7 @@ class State(TypedDict, total=False):
     collection_ids: list[str]
     model_id: str
     standalone_question: str
+    search_queries: list[str]
     context: list[RetrievedChunk]
     answer: str | None
     sources: list[dict]
@@ -100,6 +122,8 @@ class RAGResult:
     latency_seconds: float
     model: str
     standalone_question: str
+    # Searches actually run: the question itself, then the sub-queries planned by the LLM.
+    search_queries: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -177,8 +201,70 @@ def confidence_from(chunks: Sequence[RetrievedChunk]) -> float:
     return round(max(0.0, 1.0 - sum(best) / len(best)), 3)
 
 
+def parse_plan(reply: str, question: str, max_queries: int) -> list[str]:
+    """Search queries from the planner's JSON reply: the question itself, then up to
+    ``max_queries`` planned sub-queries.
+
+    Anything unusable (no JSON, wrong shape) falls back to the question alone: planning
+    can only widen retrieval, never break it.
+    """
+    queries = [question]
+    match = _JSON_OBJECT_RE.search(reply or "")
+    planned: list = []
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            planned = data.get("queries", []) if isinstance(data, dict) else []
+        except json.JSONDecodeError:
+            planned = []
+    seen = {_normalise(question)}
+    for item in planned if isinstance(planned, list) else []:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        key = _normalise(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(" ".join(item.split()))
+        if len(queries) - 1 >= max_queries:
+            break
+    return queries
+
+
+def interleave(ranked: Sequence[Sequence[RetrievedChunk]], limit: int) -> list[RetrievedChunk]:
+    """Round-robin over the per-query rankings so each search contributes passages."""
+    merged: list[RetrievedChunk] = []
+    seen: set[uuid.UUID] = set()
+    depth = max((len(r) for r in ranked), default=0)
+    for position in range(depth):
+        for results in ranked:
+            if position < len(results) and results[position].id not in seen:
+                seen.add(results[position].id)
+                merged.append(results[position])
+                if len(merged) >= limit:
+                    return merged
+    return merged
+
+
 def _spec(state: State) -> ModelSpec:
     return resolve_model(state.get("model_id"))
+
+
+async def _search(query: str, collection_ids: list[uuid.UUID]) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
+    """(all candidates, grounded top-k) for one query."""
+    settings = get_settings()
+    vector = await asyncio.to_thread(get_embeddings().embed_query, query)
+    results = await asyncio.to_thread(
+        get_store().search,
+        query,
+        vector,
+        collection_ids,
+        settings.retrieval_candidates,
+        settings.retrieval_hybrid,
+    )
+    kept = [r for r in results if r.distance <= settings.retrieval_max_distance]
+    kept = (await asyncio.to_thread(rerank, query, kept))[: settings.retrieval_top_k]
+    return results, kept
 
 
 # ---------------------------------------------------------------------------
@@ -208,18 +294,7 @@ async def retrieve(state: State) -> dict:
     query = state.get("standalone_question") or state["question"]
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
 
-    vector = await asyncio.to_thread(get_embeddings().embed_query, query)
-    results = await asyncio.to_thread(
-        get_store().search,
-        query,
-        vector,
-        collection_ids,
-        settings.retrieval_candidates,
-        settings.retrieval_hybrid,
-    )
-    kept = [r for r in results if r.distance <= settings.retrieval_max_distance]
-    kept = (await asyncio.to_thread(rerank, query, kept))[: settings.retrieval_top_k]
-    RAG_RETAINED_CHUNKS.observe(len(kept))
+    results, kept = await _search(query, collection_ids)
 
     log.info(
         "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
@@ -232,8 +307,10 @@ async def retrieve(state: State) -> dict:
     )
 
     if not kept:
+        RAG_RETAINED_CHUNKS.observe(0)
         log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
+            "search_queries": [query],
             "context": [],
             "answer": no_answer_text(),
             "sources": [],
@@ -241,11 +318,49 @@ async def retrieve(state: State) -> dict:
             "refused": True,
         }
     return {
+        "search_queries": [query],
         "context": kept,
         "answer": None,
         "sources": build_sources(kept),
         "confidence_metric": confidence_from(kept),
         "refused": False,
+    }
+
+
+async def plan(state: State) -> dict:
+    """Agentic retrieval: the LLM decides which extra searches the question needs."""
+    settings = get_settings()
+    if state.get("refused") or not settings.agentic_retrieval or settings.agentic_max_queries < 2:
+        RAG_RETAINED_CHUNKS.observe(len(state.get("context") or []))
+        return {}
+    question = state.get("standalone_question") or state["question"]
+    llm = initialize_model_llm(_spec(state))
+    response = await llm.ainvoke(
+        [HumanMessage(PLAN_PROMPT.format(max_queries=settings.agentic_max_queries, question=question))]
+    )
+    reply = response.content if isinstance(response.content, str) else str(response.content)
+    queries = parse_plan(reply, question, settings.agentic_max_queries)
+    if len(queries) == 1:
+        log.info("[plan] une seule recherche suffit")
+        RAG_RETAINED_CHUNKS.observe(len(state["context"]))
+        return {}
+
+    collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
+    extra = await asyncio.gather(*(_search(q, collection_ids) for q in queries[1:]))
+    rankings = [state["context"]] + [kept for _, kept in extra]
+    merged = interleave(rankings, settings.retrieval_top_k)
+    RAG_RETAINED_CHUNKS.observe(len(merged))
+    log.info(
+        "[plan] %d recherches : %s — retenus par recherche : %s",
+        len(queries),
+        " | ".join(queries),
+        ", ".join(str(len(r)) for r in rankings),
+    )
+    return {
+        "search_queries": queries,
+        "context": merged,
+        "sources": build_sources(merged),
+        "confidence_metric": confidence_from(merged),
     }
 
 
@@ -276,7 +391,7 @@ async def generate(state: State) -> dict:
 
 
 def _build_graph():
-    graph = StateGraph(State).add_sequence([condense, retrieve, generate])
+    graph = StateGraph(State).add_sequence([condense, retrieve, plan, generate])
     graph.add_edge(START, "condense")
     return graph.compile()
 
@@ -314,6 +429,7 @@ def _result(state: dict, started: float) -> RAGResult:
         latency_seconds=latency,
         model=state["model_id"],
         standalone_question=state.get("standalone_question") or state["question"],
+        search_queries=state.get("search_queries") or [],
     )
 
 
