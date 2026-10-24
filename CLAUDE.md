@@ -23,6 +23,7 @@ python -m eval.run_eval --collection mifid [--ingest DIR]   # quality benchmark 
 ruff check src eval tests
 pytest                                     # SQLite + fakes, no external service
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest   # + real pgvector tests
+E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=... E2E_PASSWORD=... pytest -m e2e   # UI scenario (Playwright + Chrome, running stack)
 cd frontend && npm run build               # tsc strict + vite
 
 docker compose up -d --build               # production stack (docker-compose.yaml, .env from .env.production.example)
@@ -71,4 +72,5 @@ docker compose up -d --build               # production stack (docker-compose.ya
 
 `tests/conftest.py` sets env vars before importing `src`, uses SQLite in-memory, `InMemoryChunkStore`,
 `HashEmbeddings` and `ScriptedChatModel` (`tests/fakes.py`), Celery eager mode. `tests/test_pg.py`
-(marker `pg`) migrates a real database from scratch.
+(marker `pg`) migrates a real database from scratch. `tests/e2e/` (marker `e2e`) drives the running UI with
+Playwright: agentic retrieval, definition chunking and refusal on the HR corpus.
