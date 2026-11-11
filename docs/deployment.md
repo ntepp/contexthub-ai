@@ -119,6 +119,10 @@ journal d'audit.
 git pull && docker compose up -d --build              # les migrations s'appliquent au démarrage
 ```
 
+Une évolution du découpage (par exemple le découpage des définitions point par point) ne
+s'applique qu'aux documents importés ensuite. Pour en faire profiter les documents déjà
+indexés : `docker compose exec api entrypoint.sh cli reindex [--collection NOM]`.
+
 ## 9. Mise à niveau depuis une version antérieure à la v1
 
 La v1 change le stockage des passages indexés (table `hub_chunks`, découpage par article). Les

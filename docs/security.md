@@ -23,7 +23,7 @@ joignables que sur le réseau Docker interne.
 | Configuration | Ce qui sort de l'infrastructure |
 |---|---|
 | `LLM_MODELS` ne contient que des modèles `ollama:` et `EMBEDDING_PROVIDER=ollama` | **Rien.** Mode 100 % local. |
-| Un modèle `anthropic:`, `openai:` ou `openai_compatible:` (non local) est autorisé | Quand un utilisateur le choisit : la question et les **extraits de documents retenus** (8 au plus) sont envoyés au fournisseur. L'interface l'indique en permanence. |
+| Un modèle `anthropic:`, `openai:` ou `openai_compatible:` (non local) est autorisé | Quand un utilisateur le choisit : la question (pour la reformulation et la planification des recherches) et les **extraits de documents retenus** (8 au plus) sont envoyés au fournisseur. L'interface l'indique en permanence. |
 | `EMBEDDING_PROVIDER=openai` | Le texte intégral des documents est envoyé au fournisseur lors de l'indexation. Déconseillé. |
 | `LANGCHAIN_TRACING_V2=true` | Prompts et extraits envoyés à LangSmith. **Désactivé par défaut**, forcé à `false` au démarrage sinon. |
 | `ALLOW_URL_INGESTION=true` | Le serveur télécharge les pages web demandées par les éditeurs. Désactivé par défaut. |
@@ -62,7 +62,7 @@ fournisseurs cloud autorisés).
 ## 5. Journal d'audit
 
 Chaque action est journalisée : connexions (réussies, échouées, bloquées), questions et
-réponses (texte intégral, sources citées, modèle, latence), consultations et téléchargements de
+réponses (texte intégral, recherches effectuées, sources citées, modèle, latence), consultations et téléchargements de
 documents, imports, suppressions, gestion des comptes et des droits, exports du journal.
 
 - **Ajout seul et chaînage** : chaque événement contient `hash = SHA-256(hash précédent ‖

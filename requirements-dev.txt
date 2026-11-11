@@ -2,3 +2,5 @@
 pytest==9.0.2
 pytest-asyncio==1.3.0
 ruff==0.17.0
+# End-to-end UI test (tests/e2e): uses an installed Chrome, no browser download needed.
+playwright==1.63.0

@@ -20,6 +20,8 @@ start.bat                                          # ou ./start.sh
 ruff check src eval tests
 pytest                                             # SQLite, sans service externe
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest -m pg
+# Interface (application démarrée, Chrome installé) :
+E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=admin@... E2E_PASSWORD=... pytest -m e2e
 cd frontend && npm run build
 ```
 

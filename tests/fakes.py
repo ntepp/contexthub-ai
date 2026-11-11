@@ -69,6 +69,10 @@ def is_condense_prompt(messages: list[BaseMessage]) -> bool:
     return "Standalone question:" in str(messages[-1].content)
 
 
+def is_plan_prompt(messages: list[BaseMessage]) -> bool:
+    return "You plan the searches" in str(messages[-1].content)
+
+
 def make_pdf(pages: list[list[str]]) -> bytes:
     """Minimal valid PDF, one text line per entry, Helvetica, ASCII only."""
     objects: list[bytes] = []

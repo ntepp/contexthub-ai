@@ -1,0 +1,201 @@
+{
+  "metadata": {
+    "corpus": "Fiches pratiques Service-Public.fr (DILA) sur le droit du travail du secteur privé : période d'essai, démission, congés payés, congé pour décès, rupture conventionnelle, jours fériés, télétravail, CDI, modification du contrat — instantané du 2026-10-22, licence Etalab 2.0",
+    "collection": "rh",
+    "corpus_dir": "eval/corpora/rh",
+    "expected_documents": [
+      "F1643-periode-d-essai-pour-un-salarie.md",
+      "F2883-demission-d-un-salarie.md",
+      "F2258-conges-payes-du-salarie-dans-le-secteur-prive.md",
+      "F2278-conge-pour-le-deces-d-un-membre-de-la-famille-dun-salarie-du.md",
+      "F19030-rupture-conventionnelle-d-un-salarie-du-secteur-prive.md",
+      "F2405-jours-feries-et-ponts-dans-le-secteur-prive.md",
+      "F13851-teletravail-du-salarie-dans-le-secteur-prive.md"
+    ],
+    "version": "1.0",
+    "created": "2026-10-22",
+    "notes": "Jeu de référence RH : démontre le banc et le produit hors finance, sur un corpus Markdown structuré par titres (onglets CDI/CDD/Intérim, questions en accordéon). Réponses vérifiées dans les fiches de eval/corpora/rh. reference_article contient un titre de section (pas un numéro d'article) : la métrique « bonne section » vérifie qu'il figure dans le chemin de section d'une source citée. Deux fiches (CDI, modification du contrat) ne portent aucune question : elles servent de distracteurs. Les entrées answerable=false sont des pièges dont la réponse n'existe dans aucune fiche (vérifié par recherche dans le corpus) : seul le refus est correct."
+  },
+  "questions": [
+    {
+      "id": "RH01",
+      "category": "factual_simple",
+      "question": "Quelle est la durée maximale de la période d'essai initiale d'un cadre en CDI ?",
+      "ground_truth": "La durée maximale légale de la période d'essai initiale d'un cadre en CDI est de 4 mois. Renouvelable une fois, elle peut atteindre 8 mois au maximum si le renouvellement est prévu par un accord de branche étendu, indiqué dans le contrat de travail et accepté par écrit par le salarié pendant la période initiale.",
+      "source_document": "F1643-periode-d-essai-pour-un-salarie.md",
+      "reference_article": "Quelle est la durée de la période d'essai pour un salarié en CDI",
+      "answerable": true
+    },
+    {
+      "id": "RH02",
+      "category": "reasoning_conditional",
+      "question": "Un employeur veut mettre fin à la période d'essai d'un salarié présent depuis deux mois. Quel délai de prévenance doit-il respecter ?",
+      "ground_truth": "Pour une présence entre 1 mois et 3 mois, l'employeur doit respecter un délai de prévenance d'au moins 2 semaines. S'il ne le respecte pas, il verse au salarié une indemnité compensatrice égale aux salaires et avantages que celui-ci aurait perçus jusqu'à la fin du délai de prévenance.",
+      "source_document": "F1643-periode-d-essai-pour-un-salarie.md",
+      "reference_article": "L'employeur met fin au contrat de travail",
+      "answerable": true
+    },
+    {
+      "id": "RH03",
+      "category": "factual_simple",
+      "question": "La période d'essai d'un CDD peut-elle être renouvelée ?",
+      "ground_truth": "Non. Contrairement à la période d'essai d'un CDI, la période d'essai d'un CDD ne peut pas être renouvelée, même en cas d'accord entre le salarié et l'employeur.",
+      "source_document": "F1643-periode-d-essai-pour-un-salarie.md",
+      "reference_article": "Quelle est la durée de la période d'essai d'un salarié en CDD",
+      "answerable": true
+    },
+    {
+      "id": "RH04",
+      "category": "factual_simple",
+      "question": "Combien de jours de congé un salarié obtient-il pour le décès de son père ?",
+      "ground_truth": "Le salarié a droit à 3 jours de congé pour le décès de son père (comme pour sa mère, son beau-père ou sa belle-mère), ou à une durée plus élevée si la convention collective ou un accord collectif d'entreprise le prévoit. Les jours sont comptés en jours ouvrables.",
+      "source_document": "F2278-conge-pour-le-deces-d-un-membre-de-la-famille-dun-salarie-du.md",
+      "reference_article": "Décès d'un proche",
+      "answerable": true
+    },
+    {
+      "id": "RH05",
+      "category": "reasoning_conditional",
+      "question": "Quels congés un salarié peut-il prendre au décès de son enfant de 10 ans ?",
+      "ground_truth": "Pour le décès d'un enfant de moins de 25 ans, le salarié a droit à un congé de 14 jours ouvrables, auquel s'ajoute un congé de deuil de 8 jours. Le congé de deuil peut être fractionné en 2 périodes au maximum pour un salarié, d'au moins 1 jour chacune, et doit être pris dans un délai d'1 an à compter du décès.",
+      "source_document": "F2278-conge-pour-le-deces-d-un-membre-de-la-famille-dun-salarie-du.md",
+      "reference_article": "Décès d'un enfant",
+      "answerable": true
+    },
+    {
+      "id": "RH06",
+      "category": "factual_simple",
+      "question": "Combien de jours de congés payés un salarié acquiert-il par mois de travail effectif ?",
+      "ground_truth": "Le salarié acquiert 2,5 jours ouvrables de congés payés par mois de travail effectif chez le même employeur, qu'il travaille à temps plein ou à temps partiel, soit 30 jours ouvrables (5 semaines) pour une année complète de travail.",
+      "source_document": "F2258-conges-payes-du-salarie-dans-le-secteur-prive.md",
+      "reference_article": "À combien de jours de congés payés le salarié a-t-il droit",
+      "answerable": true
+    },
+    {
+      "id": "RH07",
+      "category": "factual_simple",
+      "question": "Combien de jours de congés payés consécutifs un salarié peut-il poser au maximum ?",
+      "ground_truth": "Le salarié ne peut pas poser plus de 24 jours ouvrables de congés consécutifs, soit 4 semaines : c'est le congé principal. L'employeur peut accorder un congé plus long en cas de contraintes géographiques particulières ou de présence au foyer d'une personne handicapée ou d'une personne âgée en perte d'autonomie.",
+      "source_document": "F2258-conges-payes-du-salarie-dans-le-secteur-prive.md",
+      "reference_article": "Combien de jours de congés payés le salarié peut-il poser en une seule fois",
+      "answerable": true
+    },
+    {
+      "id": "RH08",
+      "category": "reasoning_conditional",
+      "question": "Un salarié en arrêt maladie n'a pas pu poser tous ses congés payés. De combien de temps dispose-t-il pour les prendre ?",
+      "ground_truth": "Il bénéficie d'une période de report de 15 mois pour prendre ces congés. Le délai démarre à la date à laquelle l'employeur l'informe de ses droits après la reprise du travail. Un accord collectif d'entreprise ou de branche peut prévoir une durée plus longue ; les congés non pris à la fin du délai sont perdus.",
+      "source_document": "F2258-conges-payes-du-salarie-dans-le-secteur-prive.md",
+      "reference_article": "Le salarié peut-il reporter ses jours de congés non pris sur l'année suivante",
+      "answerable": true
+    },
+    {
+      "id": "RH09",
+      "category": "factual_simple",
+      "question": "Quel est le délai de rétractation après la signature d'une rupture conventionnelle ?",
+      "ground_truth": "L'employeur et le salarié disposent d'un droit de rétractation de 15 jours calendaires, qui débute le lendemain de la signature de la convention. Si le dernier jour tombe un samedi, un dimanche ou un jour férié ou chômé, il est prolongé jusqu'au premier jour ouvrable suivant. La partie qui se rétracte informe l'autre par lettre recommandée avec avis de réception ou remise en main propre contre décharge, sans avoir à donner de motif.",
+      "source_document": "F19030-rupture-conventionnelle-d-un-salarie-du-secteur-prive.md",
+      "reference_article": "Peut-on se rétracter après avoir signé une rupture conventionnelle",
+      "answerable": true
+    },
+    {
+      "id": "RH10",
+      "category": "factual_simple",
+      "question": "De combien de temps l'administration dispose-t-elle pour homologuer une rupture conventionnelle, et que se passe-t-il si elle ne répond pas ?",
+      "ground_truth": "La DDETSPP dispose de 15 jours ouvrables à partir du lendemain de la réception de la demande pour vérifier la validité de la convention. Si elle n'a pas répondu dans ce délai, la convention est homologuée.",
+      "source_document": "F19030-rupture-conventionnelle-d-un-salarie-du-secteur-prive.md",
+      "reference_article": "Comment se déroule la procédure d'homologation de la convention de rupture",
+      "answerable": true
+    },
+    {
+      "id": "RH11",
+      "category": "reasoning_conditional",
+      "question": "Quel préavis doit respecter un salarié payé au mois qui démissionne d'un emploi situé en Moselle ?",
+      "ground_truth": "En Moselle, dans le Bas-Rhin et le Haut-Rhin, le préavis de démission est de 15 jours lorsque la rémunération est fixée par mois. Il est de 6 semaines pour les cadres, techniciens, agents de maîtrise, commis commerciaux et professeurs, ainsi que pour les salariés rémunérés au trimestre ou sur une période plus longue.",
+      "source_document": "F2883-demission-d-un-salarie.md",
+      "reference_article": "Le contrat de travail est réalisé dans les départements de la Moselle",
+      "answerable": true
+    },
+    {
+      "id": "RH12",
+      "category": "factual_simple",
+      "question": "Quel jour férié est obligatoirement chômé pour tous les salariés, et comment est payé un salarié qui travaille ce jour-là ?",
+      "ground_truth": "Parmi les fêtes légales, seul le 1er mai est obligatoirement chômé pour tous les salariés, sauf dans les entreprises qui ne peuvent pas interrompre le travail en raison de leur activité (hôpitaux, transports publics par exemple). Le salarié qui travaille le 1er mai bénéficie du doublement de sa rémunération.",
+      "source_document": "F2405-jours-feries-et-ponts-dans-le-secteur-prive.md",
+      "reference_article": "1er mai",
+      "answerable": true
+    },
+    {
+      "id": "RH13",
+      "category": "reasoning_conditional",
+      "question": "L'employeur peut-il refuser le télétravail à un salarié aidant d'un parent, en l'absence d'accord collectif ou de charte ?",
+      "ground_truth": "Oui, l'employeur peut refuser. En l'absence d'accord collectif ou de charte, il n'a en principe pas à motiver son refus, mais lorsque la demande vient d'un travailleur handicapé ou d'un salarié aidant d'un enfant, d'un parent ou d'un proche, il doit expliquer les motifs de son refus.",
+      "source_document": "F13851-teletravail-du-salarie-dans-le-secteur-prive.md",
+      "reference_article": "Absence d'accord collectif ou de charte",
+      "answerable": true
+    },
+    {
+      "id": "RH14",
+      "category": "cross_document",
+      "question": "Quelle est la durée maximale de la période d'essai initiale d'un employé en CDI, et une rupture conventionnelle peut-elle être conclue pendant cette période ?",
+      "ground_truth": "Pour un employé ou un ouvrier en CDI, la durée maximale légale de la période d'essai initiale est de 2 mois (4 mois au maximum avec un renouvellement). Une rupture conventionnelle ne peut pas être conclue pendant la période d'essai.",
+      "source_document": "F1643-periode-d-essai-pour-un-salarie.md; F19030-rupture-conventionnelle-d-un-salarie-du-secteur-prive.md",
+      "reference_article": "Employé ou ouvrier",
+      "answerable": true
+    },
+    {
+      "id": "RH15",
+      "category": "cross_document",
+      "question": "Un salarié en télétravail a-t-il droit aux titres-restaurant, et le lundi de Pentecôte peut-il servir de journée de solidarité ?",
+      "ground_truth": "Oui : le télétravailleur bénéficie des mêmes droits individuels et collectifs que les autres salariés, y compris l'accès aux avantages sociaux comme les titres-restaurant. La journée de solidarité peut prendre la forme du travail d'un jour férié précédemment chômé autre que le 1er mai, par exemple le lundi de Pentecôte.",
+      "source_document": "F13851-teletravail-du-salarie-dans-le-secteur-prive.md; F2405-jours-feries-et-ponts-dans-le-secteur-prive.md",
+      "reference_article": "Droits généraux",
+      "answerable": true
+    },
+    {
+      "id": "RH16",
+      "category": "unanswerable_trap",
+      "question": "Combien de jours de congé un salarié obtient-il pour son mariage ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "RH17",
+      "category": "unanswerable_trap",
+      "question": "Quel est le barème des indemnités kilométriques pour un salarié qui utilise son véhicule personnel ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "RH18",
+      "category": "unanswerable_trap",
+      "question": "Quel est le montant du SMIC horaire brut en 2026 ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "RH19",
+      "category": "unanswerable_trap",
+      "question": "Quelle est la durée du congé de paternité et d'accueil de l'enfant ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "RH20",
+      "category": "unanswerable_trap",
+      "question": "Comment se calcule l'indemnité légale de licenciement d'un salarié ayant 10 ans d'ancienneté ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    }
+  ]
+}

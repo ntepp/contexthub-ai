@@ -23,6 +23,7 @@ python -m eval.run_eval --collection mifid [--ingest DIR]   # quality benchmark 
 ruff check src eval tests
 pytest                                     # SQLite + fakes, no external service
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest   # + real pgvector tests
+E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=... E2E_PASSWORD=... pytest -m e2e   # UI scenario (Playwright + Chrome, running stack)
 cd frontend && npm run build               # tsc strict + vite
 
 docker compose up -d --build               # production stack (docker-compose.yaml, .env from .env.production.example)
@@ -40,12 +41,12 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
 | `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`) |
-| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
-| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → generate`; `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
+| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (backoff on transient errors only) + nightly `purge_expired` |
-| `eval/` | Golden dataset, metrics, reporter, runner |
+| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, pages: Chat, KnowledgeBase, Account, admin/* |
 
 ## Invariants — do not break
@@ -56,8 +57,10 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - Hybrid search widens the candidate pool; the distance threshold still gates grounding.
 - `NO_ANSWER_TEXT` is emitted verbatim by `retrieve` and normalised from the LLM (`is_refusal`); a
   refusal drops its sources. The eval harness matches on the exact string.
-- Streaming forwards only tokens from the `generate` node (`condense` also calls the LLM). When retrieve
+- Streaming forwards only tokens from the `generate` node (`condense` and `plan` also call the LLM). When retrieve
   short-circuits, the refusal is emitted from the retrieve end event, else the UI shows an empty bubble.
+- `plan` runs only after `retrieve` kept something for the question itself (refusals stay LLM-free); the
+  question's own ranking always comes first in the merge and a bad planner reply falls back to it.
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
 - Every collection access goes through `load_collection()` / `accessible_collections()`; inaccessible
   collections answer 404. Retrieval filters by collection ids in SQL.
@@ -69,4 +72,5 @@ docker compose up -d --build               # production stack (docker-compose.ya
 
 `tests/conftest.py` sets env vars before importing `src`, uses SQLite in-memory, `InMemoryChunkStore`,
 `HashEmbeddings` and `ScriptedChatModel` (`tests/fakes.py`), Celery eager mode. `tests/test_pg.py`
-(marker `pg`) migrates a real database from scratch.
+(marker `pg`) migrates a real database from scratch. `tests/e2e/` (marker `e2e`) drives the running UI with
+Playwright: agentic retrieval, definition chunking and refusal on the HR corpus.

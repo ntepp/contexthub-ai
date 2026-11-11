@@ -4,11 +4,42 @@ ContextHub est livré avec un banc d'évaluation reproductible. Il sert à trois
 **prouver** la qualité avant une vente, **valider** une installation sur le corpus d'un client,
 et **empêcher les régressions** à chaque modification du pipeline.
 
-## Jeu de référence
+## Jeux de référence
 
 Le banc ne dépend d'aucun métier : un jeu de référence est un fichier JSON de questions et de
-réponses attendues, à constituer sur n'importe quel corpus (RH, IT, contrats…). Le jeu livré
-sert de démonstration, sur un corpus public et exigeant.
+réponses attendues, à constituer sur n'importe quel corpus (RH, IT, contrats…). Deux jeux sont
+livrés, sur des corpus publics de nature très différente :
+
+| Jeu | Corpus | Format | Questions |
+|---|---|---|---|
+| `golden_rh.json` | 9 fiches Service-Public.fr sur le droit du travail (instantané livré dans `eval/corpora/rh`) | Markdown structuré par titres | 20 dont 5 pièges |
+| `golden_mifid.json` | MiFID II, MiFIR, EMIR (EUR-Lex, à télécharger) | PDF de 272 pages, articles | 18 dont 4 pièges |
+
+### Jeu RH (démonstration hors finance)
+
+`eval/datasets/golden_rh.json` (v1.0) : 20 questions de salariés et de gestionnaires RH sur
+9 fiches pratiques de Service-Public.fr — période d'essai, démission, congés payés, congé pour
+décès, rupture conventionnelle, jours fériés, télétravail, CDI, modification du contrat. Deux
+fiches (CDI, modification du contrat) ne portent aucune question : elles servent de distracteurs.
+
+| Catégorie | Questions | Exemple |
+|---|---|---|
+| `factual_simple` | 8 | « Quelle est la durée maximale de la période d'essai initiale d'un cadre en CDI ? » |
+| `reasoning_conditional` | 5 | « Quel préavis pour un salarié payé au mois qui démissionne en Moselle ? » |
+| `cross_document` | 2 | Période d'essai et rupture conventionnelle ; télétravail et journée de solidarité |
+| `unanswerable_trap` | 5 | Congé pour mariage, SMIC 2026, congé de paternité… : absents des fiches, seul le refus est correct |
+
+Le corpus est un **instantané** (22 octobre 2026), livré dans le dépôt pour que les mesures
+soient reproductibles : les fiches sont publiées par la DILA sous licence Etalab 2.0 (Licence
+Ouverte), qui en autorise la copie avec mention de la source, portée en tête de chaque fichier.
+Pour le rafraîchir, `python -m eval.tools.fetch_service_public eval/corpora/rh F2278 F1643 …`,
+puis revérifiez les réponses attendues (les fiches suivent l'évolution du droit).
+
+Ici les passages ne portent pas de numéro d'article : `reference_article` contient un titre de
+section (« Décès d'un proche ») et la métrique « bon article » vérifie qu'il figure dans le
+chemin de section d'une source citée.
+
+### Jeu MiFID (réglementation financière)
 
 `eval/datasets/golden_mifid.json` (v0.2) : 18 questions sur trois textes EUR-Lex en français —
 MiFID II (directive 2014/65/UE), MiFIR (règlement 600/2014), EMIR (règlement 648/2012), soit
@@ -30,13 +61,15 @@ MiFID II (directive 2014/65/UE), MiFIR (règlement 600/2014), EMIR (règlement 6
 | Refus à tort | Part des questions répondables où le système a refusé |
 | Score sémantique | Similarité cosinus (bge-m3) entre la réponse et la référence ; réussite si ≥ 0,75 |
 | Bonne source | Tous les documents attendus figurent parmi les sources retournées |
-| Bon article | L'article attendu figure dans la section d'une source **citée** |
+| Bon article | L'article attendu (« Article 2 ») ou, sans numéro d'article, le titre de section attendu figure dans le chemin de section d'une source **citée** |
 | Calibration | Pertinence moyenne des sources pour les réponses justes vs fausses |
 
 ## Lancer une évaluation
 
 ```bash
-# Indexer le corpus puis évaluer (collection créée si besoin)
+# Jeu RH : le corpus livré (metadata.corpus_dir) est indexé automatiquement
+python -m eval.run_eval --dataset eval/datasets/golden_rh.json
+# Jeu MiFID : indexer les PDF téléchargés puis évaluer (collection créée si besoin)
 python -m eval.run_eval --collection mifid --ingest ./corpus/mifid
 # Rejouer sur un autre modèle autorisé
 python -m eval.run_eval --collection mifid --model anthropic:claude-sonnet-5-5

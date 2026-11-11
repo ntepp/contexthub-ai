@@ -1,8 +1,10 @@
 import csv
 import json
+from pathlib import Path
 
 from eval.harness.loader import load_golden_dataset, validate_dataset
 from eval.harness.metrics import (
+    _fold,
     aggregate_results,
     article_hit,
     refusal_exact_match,
@@ -11,6 +13,8 @@ from eval.harness.metrics import (
 )
 from eval.harness.reporter import CSV_COLUMNS, write_report
 from src.config import DEFAULT_NO_ANSWER
+from src.ingestion.chunking import chunk_pages
+from src.ingestion.loaders import load_text
 from tests.fakes import HashEmbeddings
 
 DATASET = "eval/datasets/golden_mifid.json"
@@ -21,6 +25,24 @@ def test_golden_dataset_is_valid():
     assert len(ds.questions) == 18
     assert ds.metadata["version"] == "0.2"
     assert validate_dataset(ds, DEFAULT_NO_ANSWER) == []
+
+
+def test_hr_dataset_is_valid_and_matches_its_corpus():
+    ds = load_golden_dataset("eval/datasets/golden_rh.json")
+    assert validate_dataset(ds, DEFAULT_NO_ANSWER) == []
+    assert len(ds.questions) == 20
+    assert sum(not q.answerable for q in ds.questions) == 5  # 25 % traps
+    corpus = Path(ds.metadata["corpus_dir"])
+    chunks_by_doc: dict[str, list] = {}
+    for q in ds.questions:
+        for name in q.expected_documents:
+            assert (corpus / name).is_file(), name
+            if name not in chunks_by_doc:
+                chunks_by_doc[name] = chunk_pages(load_text(corpus / name).pages)
+        if q.answerable:
+            # The expected section is a real section path produced by the chunker.
+            paths = [" › ".join(c.section_path) for n in q.expected_documents for c in chunks_by_doc[n]]
+            assert any(_fold(q.reference_article) in _fold(p) for p in paths), q.id
 
 
 def test_validation_catches_inconsistent_traps():
@@ -53,6 +75,17 @@ def test_article_hit_prefers_cited_sources():
     assert article_hit(sources, "Article 93") is True
     assert article_hit(sources, "Article 4, paragraphe 1, point 23)") is False
     assert article_hit(sources, None) is None
+
+
+def test_article_hit_matches_section_titles_without_article_numbers():
+    sources = [
+        {"cited": True, "section": "Décès d’un proche",
+         "section_path": ["Congé pour décès", "Quelle est la durée du congé ?", "Décès d’un proche"]},
+        {"cited": False, "section": "Décès d'un enfant", "section_path": ["Décès d'un enfant"]},
+    ]
+    assert article_hit(sources, "deces d'un proche") is True  # accents, case, apostrophes
+    assert article_hit(sources, "Quelle est la durée du congé") is True
+    assert article_hit(sources, "Décès d'un enfant") is False  # only cited sources count
 
 
 def _responses():

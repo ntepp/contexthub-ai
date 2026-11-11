@@ -129,12 +129,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="eval/results")
     parser.add_argument("--threshold", type=float, default=0.75, help="seuil de similarité sémantique")
     parser.add_argument("--model", default=None, help="provider:modele (doit figurer dans LLM_MODELS)")
-    parser.add_argument("--ingest", type=Path, default=None, help="dossier de documents à indexer avant l'évaluation")
+    parser.add_argument(
+        "--ingest",
+        type=Path,
+        default=None,
+        help="dossier de documents à indexer avant l'évaluation (défaut : metadata.corpus_dir du jeu, s'il existe)",
+    )
     args = parser.parse_args(argv)
 
-    collection = args.collection or load_golden_dataset(args.dataset).metadata.get("collection") or "default"
-    if args.ingest:
-        ingest_directory(collection, args.ingest)
+    metadata = load_golden_dataset(args.dataset).metadata
+    collection = args.collection or metadata.get("collection") or "default"
+    corpus = args.ingest or (Path(metadata["corpus_dir"]) if metadata.get("corpus_dir") else None)
+    if corpus:
+        ingest_directory(collection, corpus)
     asyncio.run(run_evaluation(args.dataset, collection, args.output, args.threshold, args.model))
     return 0
 
