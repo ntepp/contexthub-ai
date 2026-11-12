@@ -158,11 +158,17 @@ def cited_indices(answer: str) -> set[int]:
     return found
 
 
+_LEADING_HEADINGS = re.compile(r"\A(?:#{1,6} [^\n]*\n+)+(?=\S)")
+
+
 def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
     sources = []
     for index, chunk in enumerate(chunks, start=1):
         meta = chunk.metadata or {}
         body = chunk.content.split("\n", 1)[1] if chunk.content.startswith("[") and "\n" in chunk.content else chunk.content
+        # Markdown / HTML sections start with their own heading line, already shown as the
+        # section path: keep it out of the excerpt when text follows.
+        body = _LEADING_HEADINGS.sub("", body, count=1) or body
         sources.append(
             {
                 "index": index,
@@ -175,6 +181,8 @@ def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
                 "section_path": meta.get("section_path") or [],
                 "snippet": body[:600],
                 "distance": round(chunk.distance, 4),
+                "url": meta.get("source_url"),
+                "source_kind": meta.get("source_kind"),
                 "cited": False,
             }
         )

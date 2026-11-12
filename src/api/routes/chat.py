@@ -12,10 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.deps import accessible_collections, actor_of, current_user, load_collection
+from src.api.routes.connectors import serialize_sources
 from src.audit import service as audit
 from src.audit.service import Actor
 from src.auth.rate_limit import limiter
 from src.config import get_settings
+from src.connectors import session_sources
 from src.db.models import ACCESS_VIEWER, Collection, Conversation, Message, User, utcnow
 from src.db.session import SessionLocal, get_db
 from src.llm.factory import LLMProvider, ModelNotAllowed, default_model, model_catalogue, resolve_model
@@ -26,6 +28,7 @@ log = get_logger()
 router = APIRouter(tags=["chat"])
 
 _AUDIT_TEXT_LIMIT = 20_000
+_DEFAULT_TITLE = "Nouvelle conversation"
 
 
 class AskRequest(BaseModel):
@@ -34,6 +37,8 @@ class AskRequest(BaseModel):
     collection: str | None = Field(default=None, description="Nom de collection (compatibilité v0)")
     conversation_id: uuid.UUID | None = None
     model: str | None = None
+    # Search only the pages attached to the conversation (Confluence, Notion…).
+    attached_only: bool = False
 
 
 class FeedbackRequest(BaseModel):
@@ -65,7 +70,20 @@ def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> Pre
     except (ModelNotAllowed, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    if body.collection_ids:
+    conversation: Conversation | None = None
+    attached_id: uuid.UUID | None = None
+    if body.conversation_id:
+        conversation = db.get(Conversation, body.conversation_id)
+        if conversation is None or conversation.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation introuvable.")
+        attached = session_sources.session_collection(db, conversation.id)
+        attached_id = attached.id if attached is not None else None
+
+    if body.attached_only:
+        if attached_id is None:
+            raise HTTPException(status_code=400, detail="Aucune page n'est jointe à cette conversation.")
+        collection_ids = []
+    elif body.collection_ids:
         collection_ids = [load_collection(db, user, cid, ACCESS_VIEWER).id for cid in body.collection_ids]
     elif body.collection:
         col = db.execute(select(Collection).where(Collection.name == body.collection)).scalar_one_or_none()
@@ -74,16 +92,16 @@ def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> Pre
         collection_ids = [load_collection(db, user, col.id, ACCESS_VIEWER).id]
     else:
         collection_ids = [c.id for c, _ in accessible_collections(db, user)]
-    if not collection_ids:
+    if not collection_ids and attached_id is None:
         raise HTTPException(status_code=400, detail="Aucune collection accessible : demandez un accès à l'administrateur.")
 
     question = body.question.strip()
     history: list[tuple[str, str]] = []
-    if body.conversation_id:
-        conversation = db.get(Conversation, body.conversation_id)
-        if conversation is None or conversation.user_id != user.id:
-            raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    if conversation is not None:
         history = [(m.role, m.content) for m in conversation.messages][-2 * settings.history_turns :]
+        if not conversation.messages and conversation.title == _DEFAULT_TITLE:
+            # Conversation opened by attaching pages: name it after its first question.
+            conversation.title = question[:80] + ("…" if len(question) > 80 else "")
     else:
         conversation = Conversation(
             user_id=user.id,
@@ -91,10 +109,12 @@ def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> Pre
             collection_ids=[str(c) for c in collection_ids],
         )
         db.add(conversation)
+    # The stored scope lists the regular collections only; attached pages are implied.
     conversation.collection_ids = [str(c) for c in collection_ids]
     conversation.updated_at = utcnow()
     db.commit()
-    return PreparedAsk(question, collection_ids, conversation.id, history, spec.id, actor_of(request, user), user.id)
+    searched = collection_ids + ([attached_id] if attached_id is not None else [])
+    return PreparedAsk(question, searched, conversation.id, history, spec.id, actor_of(request, user), user.id)
 
 
 def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
@@ -140,6 +160,7 @@ def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
                     "filename": s["filename"],
                     "page": s["page"],
                     "section": s["section"],
+                    "url": s.get("url"),
                     "cited": s["cited"],
                 }
                 for s in result.sources
@@ -269,6 +290,7 @@ def get_conversation(conversation_id: uuid.UUID, user: User = Depends(current_us
         "title": c.title,
         "collection_ids": c.collection_ids or [],
         "messages": [_serialize_message(m) for m in c.messages],
+        "sources": serialize_sources(db, c.id),
     }
 
 
@@ -287,6 +309,7 @@ def delete_conversation(
     conversation_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
 ) -> dict:
     c = _own_conversation(db, user, conversation_id)
+    session_sources.drop_for_conversations(db, [c.id])
     db.delete(c)
     db.commit()
     audit.record("conversation.delete", actor_of(request, user), resource_type="conversation", resource_id=conversation_id)

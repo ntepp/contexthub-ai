@@ -38,6 +38,7 @@ and an employee only queries what they are allowed to read.
 | **Agentic retrieval** | For a question that covers several topics or documents ("what is the notice period, and who approves remote work?"), the model plans one search per part and every part gets its passages. The searches run are returned by the API and logged. |
 | **Conversations** | Follow-up questions are understood ("and for managers?"); per-user history. |
 | **All your formats** | PDF (including scans, through OCR), Word, Markdown, plain text, HTML; chunking follows the document's headings and sections, and gives each definition of a glossary or definitions article its own passage. |
+| **Confluence and Notion, on demand** | A user attaches pages to a conversation, by link or by search (words, space, label). Nothing is synchronised in bulk: the chosen pages are read once, used in that conversation only and deleted with it. Citations open the page in its own tool. |
 | **Hybrid search** | Meaning (multilingual bge-m3 embeddings) and exact words (accent-insensitive French full-text) combined: finds "parental leave" as well as a part number. |
 | **Access control** | OpenID Connect SSO (Entra ID, Google, Okta, Keycloak) or local accounts, per-collection rights, API keys for integrations. |
 | **Audit trail** | Questions, answers, sources consulted, imports, permission changes: everything is logged, SHA-256 hash-chained, verifiable and exportable to CSV. |
@@ -104,7 +105,7 @@ API: http://localhost:8000/docs.
 ```bash
 ruff check src eval tests
 pytest                                                 # SQLite, no external service
-TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest   # + real PostgreSQL
+TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/contexthub_test pytest   # + real PostgreSQL
 cd frontend && npm run build
 ```
 

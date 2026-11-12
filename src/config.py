@@ -63,14 +63,15 @@ class Settings(BaseSettings):
     local_login_enabled: bool = True
 
     # ------------------------------------------------------------------ storage
-    postgres_host: str = "localhost"
+    # 127.0.0.1, not localhost: on Windows localhost may resolve to ::1 first and stall.
+    postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
     postgres_db: str = "contexthub"
     database_url: str | None = None
 
-    redis_host: str = "localhost"
+    redis_host: str = "127.0.0.1"
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
@@ -90,6 +91,13 @@ class Settings(BaseSettings):
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
 
+    # ------------------------------------------------------------------ connectors
+    # Pages picked by a user in Confluence / Notion are attached to one conversation.
+    connectors_enabled: bool = True
+    connector_timeout_seconds: int = 20
+    connector_max_page_mb: int = 5
+    connector_max_pages_per_conversation: int = 20
+
     # ------------------------------------------------------------------ embeddings
     embedding_provider: Literal["ollama", "openai", "openai_compatible"] = "ollama"
     embedding_model: str = "bge-m3"
@@ -104,7 +112,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_timeout_seconds: int = 120
 
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://127.0.0.1:11434"
     # "Thinking" models (qwen3, deepseek-r1…) are ~25x slower with reasoning on, for no
     # gain on short grounded answers. Off by default; ignored by non-thinking models.
     ollama_reasoning: bool = False
