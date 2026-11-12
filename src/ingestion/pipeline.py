@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.config import get_settings
-from src.db.models import DOC_FAILED, DOC_PROCESSING, DOC_READY, Document, utcnow
+from src.db.models import DOC_FAILED, DOC_PROCESSING, DOC_READY, Connection, Document, utcnow
 from src.db.session import session_scope
 from src.ingestion import storage
 from src.ingestion.chunking import chunk_pages
@@ -72,6 +72,8 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         doc.progress_current = 0
         doc.progress_total = 0
         db.flush()
+        connection = db.get(Connection, doc.connection_id) if doc.connection_id else None
+        source_kind = connection.kind if connection else None
         db.expunge(doc)
 
     store = get_store()
@@ -133,6 +135,8 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
                         "page": chunk.page,
                         "section": chunk.section,
                         "section_path": chunk.section_path,
+                        # Connector pages: the citation opens the page in its own system.
+                        **({"source_url": doc.source_url, "source_kind": source_kind} if doc.external_id else {}),
                     },
                     embedding=vector,
                 )

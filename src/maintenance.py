@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 from datetime import timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.audit import service as audit
 from src.config import get_settings
+from src.connectors.session_sources import drop_for_conversations
 from src.db.models import Conversation, utcnow
 from src.db.session import session_scope
 from src.ingestion.storage import upload_root
@@ -27,6 +28,8 @@ def purge_expired_data() -> dict:
         result["audit_events"] = audit.purge_older_than(db, settings.audit_retention_days)
         if settings.conversation_retention_days > 0:
             cutoff = utcnow() - timedelta(days=settings.conversation_retention_days)
+            expired = db.execute(select(Conversation.id).where(Conversation.updated_at < cutoff)).scalars()
+            drop_for_conversations(db, expired)
             result["conversations"] = (
                 db.execute(
                     delete(Conversation)
