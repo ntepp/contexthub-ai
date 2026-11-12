@@ -40,7 +40,7 @@ and an employee only queries what they are allowed to read.
 | **All your formats** | PDF (including scans, through OCR), Word, Markdown, plain text, HTML; chunking follows the document's headings and sections, and gives each definition of a glossary or definitions article its own passage. |
 | **Confluence and Notion, on demand** | A user attaches pages to a conversation, by link or by search (words, space, label). Nothing is synchronised in bulk: the chosen pages are read once, used in that conversation only and deleted with it. Citations open the page in its own tool. |
 | **Hybrid search** | Meaning (multilingual bge-m3 embeddings) and exact words (accent-insensitive French full-text) combined: finds "parental leave" as well as a part number. |
-| **Access control** | OpenID Connect SSO (Entra ID, Google, Okta, Keycloak) or local accounts, per-collection rights, API keys for integrations. |
+| **Access control** | OpenID Connect SSO (Entra ID, Google, Okta, Keycloak) or local accounts, per-collection rights for people and for directory groups, API keys for integrations. |
 | **Audit trail** | Questions, answers, sources consulted, imports, permission changes: everything is logged, SHA-256 hash-chained, verifiable and exportable to CSV. |
 | **GDPR** | Deletion of documents, collections and users; retention periods; erasure of personal data from the audit trail without breaking its integrity. |
 | **Any LLM provider** | Local Ollama by default; Anthropic, OpenAI, Mistral or any OpenAI-compatible endpoint if you allow it. The UI always shows when a cloud model is in use. |

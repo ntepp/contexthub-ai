@@ -18,5 +18,24 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # Optional local identity provider to try the SSO (OpenID Connect) login:
+  #   docker compose -f docker-compose.dev.yaml --profile sso up -d
+  # Realm "contexthub" with demo accounts (see deploy/keycloak/README.md). Development
+  # only: fixed passwords and client secret, no TLS, in-memory database.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["sso"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # The issuer written in tokens: must be what both the browser and the API call.
+      KC_HOSTNAME: http://127.0.0.1:8081
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./deploy/keycloak/contexthub-realm.json:/opt/keycloak/data/import/contexthub-realm.json:ro
+
 volumes:
   postgres_data:

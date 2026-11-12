@@ -62,6 +62,12 @@ essai sans TLS uniquement : `COOKIE_SECURE=false`.
 3. Optionnel : `OIDC_ALLOWED_DOMAINS=client.fr`, `OIDC_ADMIN_GROUPS=<id du groupe admin>`
    (Entra ID : activez la revendication `groups` dans le jeton).
 4. `docker compose up -d api` puis testez. Une fois validé : `LOCAL_LOGIN_ENABLED=false`.
+5. Droits par groupe : dans *Administration › Accès*, ouvrez une collection à un groupe de
+   l'annuaire (nom transmis dans la revendication `OIDC_GROUPS_CLAIM`, `groups` par défaut ;
+   Entra ID transmet l'identifiant du groupe). Les membres la trouvent à leur prochaine connexion.
+
+Pour essayer le SSO sans annuaire : un Keycloak local avec des comptes de démonstration est
+fourni (`deploy/keycloak/README.md`).
 
 Exemples d'émetteur : Entra ID `https://login.microsoftonline.com/<tenant>/v2.0`, Google
 `https://accounts.google.com`, Keycloak `https://sso.client.fr/realms/<realm>`.
