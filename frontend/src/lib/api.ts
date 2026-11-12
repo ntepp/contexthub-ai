@@ -39,6 +39,8 @@ export interface User {
   role: Role
   is_active: boolean
   auth_provider: 'local' | 'oidc'
+  /** Groups carried by the last SSO login. */
+  sso_groups?: string[]
   created_at: string | null
   last_login_at: string | null
 }
@@ -213,6 +215,11 @@ export interface AuditEvent {
   hash: string
 }
 
+export interface GroupGrant {
+  group: string
+  level: 'viewer' | 'editor'
+}
+
 export interface Grant {
   user_id: string
   email: string
@@ -311,6 +318,13 @@ export const api = {
     http.put(`/admin/collections/${collectionId}/grants`, { user_id, level }),
   revokeGrant: (collectionId: string, userId: string) =>
     http.delete(`/admin/collections/${collectionId}/grants/${userId}`),
+  ssoGroups: () => http.get<string[]>('/admin/sso-groups').then((r) => r.data),
+  groupGrants: (collectionId: string) =>
+    http.get<GroupGrant[]>(`/admin/collections/${collectionId}/group-grants`).then((r) => r.data),
+  setGroupGrant: (collectionId: string, group: string, level: 'viewer' | 'editor') =>
+    http.put(`/admin/collections/${collectionId}/group-grants`, { group, level }),
+  revokeGroupGrant: (collectionId: string, group: string) =>
+    http.delete(`/admin/collections/${collectionId}/group-grants`, { params: { group } }),
   audit: (params: Record<string, string | number | undefined>) =>
     http.get<{ total: number; items: AuditEvent[] }>('/admin/audit', { params }).then((r) => r.data),
   auditExportUrl: (params: Record<string, string | undefined>) => {

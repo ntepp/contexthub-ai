@@ -56,6 +56,7 @@ def serialize_user(user: User) -> dict:
         "role": user.role,
         "is_active": user.is_active,
         "auth_provider": user.auth_provider,
+        "sso_groups": user.oidc_groups or [],
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }

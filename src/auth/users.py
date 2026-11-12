@@ -70,7 +70,12 @@ def upsert_oidc_user(db: Session, identity: OIDCIdentity) -> User:
             # First SSO login of a pre-provisioned account: bind the subject.
             user.oidc_subject = identity.subject
         else:
-            user = User(email=identity.email, oidc_subject=identity.subject, auth_provider="oidc", role=ROLE_MEMBER)
+            user = User(
+                email=normalise_email(identity.email),
+                oidc_subject=identity.subject,
+                auth_provider="oidc",
+                role=ROLE_MEMBER,
+            )
             db.add(user)
     if identity.name and not user.full_name:
         user.full_name = identity.name
@@ -79,6 +84,9 @@ def upsert_oidc_user(db: Session, identity: OIDCIdentity) -> User:
         user.role = ROLE_ADMIN if admin_groups & set(identity.groups) else (
             ROLE_MEMBER if user.auth_provider == "oidc" else user.role
         )
+    # Group memberships are taken from the identity provider at every login: leaving a
+    # group there removes the access here at the next sign-in.
+    user.oidc_groups = sorted({str(g).strip() for g in identity.groups if str(g).strip()})[:200]
     user.last_login_at = utcnow()
     db.commit()
     return user
