@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -20,7 +21,8 @@ from src.config import get_settings
 from src.connectors import session_sources
 from src.db.models import ACCESS_VIEWER, Collection, Conversation, Message, User, utcnow
 from src.db.session import SessionLocal, get_db
-from src.llm.factory import LLMProvider, ModelNotAllowed, default_model, model_catalogue, resolve_model
+from src.llm import gateway
+from src.llm.factory import LLMProvider, ModelNotAllowed, ModelSpec, default_model, model_catalogue, resolve_model
 from src.rag.rag_pipeline import RAGResult, answer_question, stream_answer
 from src.utils.logging_config import get_logger
 
@@ -29,6 +31,8 @@ router = APIRouter(tags=["chat"])
 
 _AUDIT_TEXT_LIMIT = 20_000
 _DEFAULT_TITLE = "Nouvelle conversation"
+_ENGINE_DOWN = "Le moteur de réponse est indisponible. Réessayez dans un instant."
+ERROR_CODE_HEADER = "X-ContextHub-Error-Code"
 
 
 class AskRequest(BaseModel):
@@ -61,12 +65,12 @@ class PreparedAsk:
     user_id: uuid.UUID
 
 
-def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> PreparedAsk:
+def _prepare(body: AskRequest, request: Request, user: User, db: Session, catalogue: list[ModelSpec]) -> PreparedAsk:
     settings = get_settings()
     if not limiter.hit(f"rl:ask:{user.id}", settings.ask_rate_limit_per_minute, 60):
         raise HTTPException(status_code=429, detail="Trop de questions en une minute, patientez un instant.")
     try:
-        spec = resolve_model(body.model)
+        spec = resolve_model(body.model, catalogue)
     except (ModelNotAllowed, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -170,6 +174,33 @@ def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
     return message_id
 
 
+def _failure(prepared: PreparedAsk, exc: Exception, where: str) -> tuple[int, str, str | None]:
+    """Log and audit a failed answer; (HTTP status, French message, refusal kind)."""
+    refusal = gateway.classify_error(exc)
+    details: dict = {"question": prepared.question}
+    if refusal is None:
+        log.exception("[%s] échec du pipeline RAG", where)
+        audit.record("query.ask", prepared.actor, outcome="failure", details=details)
+        return 502, _ENGINE_DOWN, None
+    # Expected refusal (budget, rate limit, gateway down): no stack trace, no secret.
+    log.warning(
+        "[%s] refus de la passerelle LLM : %s (utilisateur=%s, modèle=%s, %s)",
+        where,
+        refusal.kind,
+        prepared.user_id,
+        prepared.model_id,
+        type(exc).__name__,
+    )
+    details["reason"] = refusal.kind
+    audit.record("query.ask", prepared.actor, outcome="failure", details=details)
+    return refusal.status_code, refusal.message, refusal.kind
+
+
+async def _catalogue() -> list[ModelSpec]:
+    # In gateway mode the catalogue may call the gateway (blocking httpx): off the event loop.
+    return await asyncio.to_thread(model_catalogue)
+
+
 def _response(prepared: PreparedAsk, result: RAGResult, message_id: uuid.UUID) -> dict:
     return {
         **result.as_dict(),
@@ -180,13 +211,16 @@ def _response(prepared: PreparedAsk, result: RAGResult, message_id: uuid.UUID) -
 
 @router.post("/chat/ask")
 async def ask(body: AskRequest, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepared = _prepare(body, request, user, db)
+    prepared = _prepare(body, request, user, db, await _catalogue())
     try:
-        result = await answer_question(prepared.question, prepared.collection_ids, prepared.history, prepared.model_id)
-    except Exception:
-        log.exception("[ask] échec du pipeline RAG")
-        audit.record("query.ask", prepared.actor, outcome="failure", details={"question": prepared.question})
-        raise HTTPException(status_code=502, detail="Le moteur de réponse est indisponible. Réessayez dans un instant.")
+        result = await answer_question(
+            prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
+        )
+    except Exception as exc:
+        status, message, kind = _failure(prepared, exc, "ask")
+        # Same code as the SSE error event: lets API clients tell a gateway 429 from ours.
+        headers = {ERROR_CODE_HEADER: kind} if kind else None
+        raise HTTPException(status_code=status, detail=message, headers=headers)
     message_id = _persist(prepared, result)
     return _response(prepared, result, message_id)
 
@@ -203,24 +237,26 @@ def _sse(payload: dict) -> str:
 async def ask_stream(
     body: AskRequest, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
-    prepared = _prepare(body, request, user, db)
+    prepared = _prepare(body, request, user, db, await _catalogue())
 
     async def events():
         yield _sse({"type": "meta", "conversation_id": str(prepared.conversation_id), "model": prepared.model_id})
         result: RAGResult | None = None
         try:
             async for event in stream_answer(
-                prepared.question, prepared.collection_ids, prepared.history, prepared.model_id
+                prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
             ):
                 if event["type"] == "token":
                     yield _sse(event)
                 elif event["type"] == "result":
                     payload = {k: v for k, v in event.items() if k != "type"}
                     result = RAGResult(**payload)
-        except Exception:
-            log.exception("[stream] échec du pipeline RAG")
-            audit.record("query.ask", prepared.actor, outcome="failure", details={"question": prepared.question})
-            yield _sse({"type": "error", "message": "Le moteur de réponse est indisponible. Réessayez dans un instant."})
+        except Exception as exc:
+            status, message, kind = _failure(prepared, exc, "stream")
+            error = {"type": "error", "message": message}
+            if kind is not None:
+                error.update(code=kind, status=status)
+            yield _sse(error)
             return
         finally:
             if result is None:
@@ -359,6 +395,12 @@ async def _ollama_available() -> set[str] | None:
 @router.get("/models")
 async def list_models(user: User = Depends(current_user)) -> dict:
     settings = get_settings()
+    if settings.gateway_enabled:
+        # Blocking lookup (cached): kept off the event loop.
+        catalogue = await asyncio.to_thread(model_catalogue)
+        served = await asyncio.to_thread(gateway.served_models)
+        models = [dict(spec.as_dict(), available=served is not None and spec.name in served) for spec in catalogue]
+        return {"models": models, "default": catalogue[0].id}
     installed = await _ollama_available()
     models = []
     for spec in model_catalogue():

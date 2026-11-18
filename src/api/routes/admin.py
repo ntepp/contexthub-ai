@@ -35,7 +35,8 @@ from src.db.models import (
 )
 from src.db.session import get_db
 from src.ingestion.loaders import ocr_available
-from src.llm.factory import model_catalogue
+from src.llm import gateway
+from src.llm.factory import ignored_model_entries, model_catalogue
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -418,6 +419,26 @@ def _check_ollama() -> dict:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def _check_gateway() -> dict:
+    """Chat side (``ok``, ``error``, served ``models``) plus configuration notes: ``ok``
+    stays true when chat works even if consumption cannot be read."""
+    check = gateway.probe()
+    settings = get_settings()
+    notes = []
+    check["consumption"] = bool(settings.llm_gateway_admin_key)
+    if not check["consumption"]:
+        notes.append("Lecture de la consommation non configurée : définissez LLM_GATEWAY_ADMIN_KEY.")
+    ignored = ignored_model_entries()
+    if ignored:
+        notes.append("LLM_MODELS : entrées ignorées en mode passerelle : " + ", ".join(ignored) + ".")
+    check["notes"] = notes
+    if notes:
+        # Display shim: the current System page prints only `error` (when not ok), `workers`
+        # and `models`. Drop once the page reads `notes`.
+        check["workers"] = notes
+    return check
+
+
 @router.get("/system")
 def system_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
     settings = get_settings()
@@ -433,6 +454,8 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
     probes = {"redis": _check_redis, "workers": _check_workers, "ocr": ocr_available}
     if uses_ollama:
         probes["ollama"] = _check_ollama
+    if settings.gateway_enabled:
+        probes["gateway"] = _check_gateway
     # Each probe may wait on a timeout: run them side by side, not one after another.
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         futures = {name: pool.submit(fn) for name, fn in probes.items()}

@@ -5,6 +5,7 @@ import { Access } from './Access'
 import { Audit } from './Audit'
 import { Connections } from './Connections'
 import { System } from './System'
+import { Usage } from './Usage'
 import { Users } from './Users'
 
 const TABS = [
@@ -12,6 +13,7 @@ const TABS = [
   ['acces', 'Accès'],
   ['connecteurs', 'Connecteurs'],
   ['journal', "Journal d'audit"],
+  ['consommation', 'Consommation'],
   ['systeme', 'Système'],
 ] as const
 
@@ -41,6 +43,7 @@ export function Admin() {
         <Route path="acces" element={<Access />} />
         <Route path="connecteurs" element={<Connections />} />
         <Route path="journal" element={<Audit />} />
+        <Route path="consommation" element={<Usage />} />
         <Route path="systeme" element={<System />} />
       </Routes>
     </div>

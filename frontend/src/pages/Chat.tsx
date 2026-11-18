@@ -4,6 +4,7 @@ import { ArrowUp, BookOpen, CloudUpload, ExternalLink, Loader2, Paperclip, Squar
 import {
   api,
   errorMessage,
+  isBudgetExceeded,
   streamAsk,
   type AttachedSource,
   type ChatMessage,
@@ -158,14 +159,20 @@ export function Chat() {
               latency_seconds: event.latency_seconds,
             }))
           } else if (event.type === 'error') {
-            updateLast(() => ({ role: 'assistant', content: event.message, error: true }))
+            // `code` is set when the LLM gateway refused the call (budget, rate limit, outage).
+            updateLast(() => ({ role: 'assistant', content: event.message, error: true, code: event.code }))
           }
         },
         abort.signal,
       )
     } catch (err) {
       if (!abort.signal.aborted) {
-        updateLast(() => ({ role: 'assistant', content: errorMessage(err), error: true }))
+        updateLast(() => ({
+          role: 'assistant',
+          content: errorMessage(err),
+          error: true,
+          code: isBudgetExceeded(err) ? 'budget_exceeded' : undefined,
+        }))
       } else {
         updateLast((m) => ({ ...m, pending: false, content: m.content || 'Réponse interrompue.' }))
       }
@@ -235,7 +242,9 @@ export function Chat() {
           {selectedModel && !selectedModel.is_local && (
             <span className="flex items-center gap-1.5 rounded-md bg-cloud-soft px-2 py-1 text-xs text-cloud">
               <CloudUpload size={14} />
-              Les extraits utiles de vos documents sont envoyés à {selectedModel.provider_label}.
+              {selectedModel.provider === 'gateway'
+                ? `Les extraits utiles de vos documents sont envoyés au modèle ${selectedModel.name} (${selectedModel.provider_label}).`
+                : `Les extraits utiles de vos documents sont envoyés à ${selectedModel.provider_label}.`}
             </span>
           )}
         </div>

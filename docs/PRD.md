@@ -255,6 +255,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
 | QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
 | LLM-1 à LLM-4 | ✅ | Ollama, Anthropic, OpenAI, endpoint compatible OpenAI (Mistral, vLLM) |
+| Passerelle LLM et consommation (ADR-001, lot 1) | 🟡 | `LLM_GATEWAY_*` : tous les appels de modèle via une passerelle compatible OpenAI (LiteLLM), attribués à l'UUID de l'utilisateur et à l'étape ; modèles `gateway:<nom>` ; refus de la passerelle (budget 402, débit 429, indisponibilité 503/502) affichés dans le chat, encart « Budget atteint » ; pages *Ma consommation* (période, coût, requêtes, jetons, budget, évolution par jour, par modèle) et *Administration › Consommation* (par utilisateur, export CSV) lues à la passerelle, aucune donnée de coût stockée ; LiteLLM de développement (`deploy/litellm/`, profil compose `gateway`). Reste : vérification de bout en bout contre une passerelle LiteLLM réelle |
 | AUD-1 à AUD-5 | ✅ | Journal chaîné SHA-256, vérification (UI + CLI), export CSV, rétention, effacement RGPD sans rupture de chaîne |
 | ADM-1 à ADM-3 | ✅ | Utilisateurs, accès par collection, état du système et flux de données |
 | EVAL-1 à EVAL-3 | ✅ | `eval/`, métriques dont calibration, rapports JSON + CSV |

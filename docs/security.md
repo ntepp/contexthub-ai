@@ -27,10 +27,39 @@ joignables que sur le réseau Docker interne.
 | `EMBEDDING_PROVIDER=openai` | Le texte intégral des documents est envoyé au fournisseur lors de l'indexation. Déconseillé. |
 | `LANGCHAIN_TRACING_V2=true` | Prompts et extraits envoyés à LangSmith. **Désactivé par défaut**, forcé à `false` au démarrage sinon. |
 | `ALLOW_URL_INGESTION=true` | Le serveur télécharge les pages web demandées par les éditeurs. Désactivé par défaut. |
+| Une passerelle LLM est configurée (`LLM_GATEWAY_URL`) | Tous les appels de modèle (reformulation, planification, génération) passent par la passerelle, avec la question et les extraits retenus ; la passerelle les transmet au fournisseur du modèle choisi. Voir ci-dessous. |
 | Une connexion Confluence ou Notion est configurée (`CONNECTORS_ENABLED=true`) | Le serveur appelle l'API de l'outil pour chercher et lire les pages choisies par les utilisateurs. Confluence Data Center reste dans votre réseau ; Confluence Cloud et Notion sont des services externes que vous utilisez déjà. Rien n'y est écrit. |
 
 La page *Administration › Système* affiche le mode effectif (« 100 % local » ou la liste des
 fournisseurs cloud autorisés).
+
+### Passerelle LLM (coûts, budgets, limites)
+
+Avec `LLM_GATEWAY_URL`, ContextHub délègue les appels de modèle à une passerelle compatible
+OpenAI (référence : LiteLLM) déployée et administrée par le client. C'est elle qui détient les
+clés des fournisseurs, calcule les coûts et applique budgets et limites de débit.
+
+- **Ce qui part vers la passerelle**, en plus du contenu de l'appel (question, extraits
+  retenus) : l'identifiant technique (UUID) de l'utilisateur dans l'en-tête
+  `x-litellm-end-user-id`, et des étiquettes fixes (`app:contexthub`, `step:condense|plan|generate`)
+  dans `x-litellm-tags`. Jamais d'adresse e-mail, de nom ni de groupe : l'UUID est vérifié avant
+  envoi. La correspondance UUID → personne n'existe que dans ContextHub.
+- **Aucune donnée de coût n'est stockée dans ContextHub.** Les pages *Ma consommation* et
+  *Administration › Consommation* interrogent la passerelle à chaque affichage, côté serveur ;
+  un utilisateur ne peut lire que sa propre consommation (identité prise de la session, jamais
+  d'un paramètre), la vue globale est réservée aux administrateurs. L'export CSV est produit
+  dans le navigateur de l'administrateur.
+- **Les clés de la passerelle restent côté serveur** (`LLM_GATEWAY_API_KEY` pour les appels,
+  `LLM_GATEWAY_ADMIN_KEY` pour la lecture de la consommation) : jamais envoyées au navigateur,
+  jamais journalisées. Le navigateur ne contacte jamais la passerelle. Les redirections ne sont
+  pas suivies, pour ne pas envoyer une clé à un autre hôte.
+- **Refus de la passerelle** (budget atteint, débit, indisponibilité) : l'utilisateur voit un
+  message en français, sans détail technique ; l'événement est inscrit au journal d'audit
+  (`query.ask`, échec, avec la raison).
+- Côté passerelle, désactivez la conservation des prompts dans les journaux de dépenses
+  (LiteLLM : `store_prompts_in_spend_logs: false`, réglage de `deploy/litellm/config.yaml`) :
+  sinon des extraits de documents y seraient conservés. Le bandeau « cloud » du chat reste
+  affiché tant que `LLM_GATEWAY_IS_LOCAL` n'est pas `true`.
 
 ## 3. Authentification
 

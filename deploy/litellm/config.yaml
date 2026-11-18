@@ -1,0 +1,53 @@
+# LiteLLM proxy configuration for DEVELOPMENT (docker-compose.dev.yaml, profile "gateway").
+# Reference: https://docs.litellm.ai/docs/proxy/configs
+#            https://docs.litellm.ai/docs/proxy/config_settings
+#
+# ContextHub calls the models below by their "model_name" (ids "gateway:<model_name>" in
+# the UI). No secret is written in this file: "os.environ/NAME" reads the variable from
+# the container environment (see the litellm service in docker-compose.dev.yaml).
+
+model_list:
+  # Local model served by Ollama on the host: nothing leaves the machine. Its name matches
+  # ContextHub's default LLM_MODEL_NAME, so it is the default model in the UI.
+  - model_name: llama3.1:8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: os.environ/OLLAMA_API_BASE
+    # Ollama has no price: requests and tokens are counted, the cost stays 0. To try
+    # budgets without a cloud key, uncomment a FICTITIOUS price (demo only, never in
+    # production: the amounts shown would not be real costs).
+    # model_info:
+    #   input_cost_per_token: 0.000001
+    #   output_cost_per_token: 0.000002
+
+  # OpenAI (needs OPENAI_API_KEY in the environment). Replace with the model of your contract.
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic (needs ANTHROPIC_API_KEY in the environment). Replace with the model of your contract.
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+general_settings:
+  # Administrator key, read from LITELLM_MASTER_KEY. The proxy refuses to start without it.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # The database (DATABASE_URL) holds virtual keys, end-user budgets and spend logs:
+  # without it, nothing is tracked.
+  # Spend per end user ("customer"): ContextHub sends its user UUID in the
+  # x-litellm-end-user-id header, read by LiteLLM without further configuration. Keep
+  # this tracking on (false is the default; written here because it is required).
+  disable_end_user_cost_tracking: false
+  # Never keep prompts and answers (i.e. document excerpts) in the spend logs.
+  store_prompts_in_spend_logs: false
+  # Spend is written to the database in batches, every N seconds (default 10).
+  proxy_batch_write_at: 10
+
+litellm_settings:
+  # Drop parameters a provider does not support instead of failing the call.
+  drop_params: true
+  # Callbacks (if any are added) receive metadata only, never message contents.
+  turn_off_message_logging: true

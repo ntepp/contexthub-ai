@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ThumbsDown, ThumbsUp } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { ChartColumn, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { api, type ChatMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,19 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
   const sources = message.sources ?? []
   const valid = useMemo(() => new Set(sources.map((s) => s.index)), [sources])
   const content = useMemo(() => linkCitations(message.content, valid), [message.content, valid])
+
+  if (message.error && message.code === 'budget_exceeded') {
+    return (
+      <div role="alert" className="rounded-md border border-refusal/30 bg-refusal-soft px-4 py-3 text-sm text-refusal">
+        <p className="font-medium">Budget atteint</p>
+        <p className="mt-1">{message.content}</p>
+        <Link to="/consommation" className="mt-2 inline-flex items-center gap-1.5 font-medium underline underline-offset-2 hover:text-ink">
+          <ChartColumn size={14} />
+          Voir ma consommation
+        </Link>
+      </div>
+    )
+  }
 
   if (message.error) {
     return <p className="rounded-md border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">{message.content}</p>

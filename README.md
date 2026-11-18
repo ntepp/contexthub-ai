@@ -70,6 +70,7 @@ two reference sets: French employment law (HR) and EU financial regulation
 | `src/retrieval/` | pgvector storage, RRF hybrid search, optional re-ranking |
 | `src/rag/` | LangGraph `condense → retrieve → plan → generate`, citations, refusal |
 | `src/llm/` | Providers and model allow-list |
+| `src/usage/` | LLM consumption read from the gateway (LiteLLM), shown in the UI, never stored |
 | `eval/` | Evaluation harness |
 | `frontend/` | React UI (French) |
 
@@ -125,6 +126,7 @@ Every business route requires a session (cookie) or an API key
 | `POST` | `/chat/ask` | Question → answer, sources, conversation |
 | `POST` | `/chat/stream` | Same, streamed (Server-Sent Events) |
 | `GET` | `/conversations` | History |
+| `GET` | `/usage/me`, `/admin/usage` | LLM consumption read from the gateway (`LLM_GATEWAY_URL`) |
 | `GET` | `/admin/audit`, `/admin/audit/export.csv`, `/admin/audit/verify` | Audit trail |
 | `GET` | `/health`, `/ready`, `/metrics` | Monitoring |
 
