@@ -49,7 +49,7 @@ n'est pas configuré et *Administration › Système* le signale.
 curl -s http://127.0.0.1:4000/key/generate \
   -H "Authorization: Bearer sk-contexthub-dev-only-master-key" \
   -H "Content-Type: application/json" \
-  -d '{"key_alias": "contexthub-dev", "models": ["llama3.1:8b", "gpt-4o", "claude-sonnet-5-5"]}'
+  -d '{"key_alias": "contexthub-dev", "models": ["qwen3.5:9b", "llama3.1:8b", "gpt-4o", "claude-sonnet-5-5"]}'
 ```
 
 La réponse contient `"key": "sk-…"` : c'est la clé applicative.
@@ -79,6 +79,13 @@ embeddings ne passent pas par la passerelle (`EMBEDDING_PROVIDER` inchangé).
 
 ## 4. Définir un budget pour un utilisateur
 
+Depuis ContextHub (ADR-002) : `PUT /admin/users/<uuid>/budget` avec
+`{"limit": 1, "period": "month"}` (périodes `day`, `week`, `month` = 30 jours), `DELETE` pour
+le retirer. ContextHub crée un budget dédié `contexthub-<uuid>` (`/budget/new`), le rattache
+au client final (`/customer/new` ou `/customer/update`) et le supprime au retrait
+(`/budget/delete`). Les appels ci-dessous restent utiles pour vérifier ou pour un budget
+défini directement dans la passerelle (ContextHub ne modifie jamais ce dernier).
+
 LiteLLM appelle « client final » (*customer*) l'utilisateur transmis par ContextHub : son
 identifiant est l'UUID du compte ContextHub. Pour le connaître, connecté à ContextHub, ouvrez
 http://localhost:5173/api/auth/me et relevez le champ `id`.
@@ -91,6 +98,8 @@ curl -s http://127.0.0.1:4000/customer/new \
   -d '{"user_id": "<uuid-contexthub>", "max_budget": 1, "budget_duration": "30d"}'
 
 # Si l'utilisateur est déjà connu de la passerelle (il a déjà posé une question) :
+# attention, /customer/update modifie le budget auquel le client est rattaché, éventuellement
+# partagé avec d'autres clients, et ignore "max_budget": null (un budget ne se retire pas ainsi).
 curl -s http://127.0.0.1:4000/customer/update \
   -H "Authorization: Bearer sk-contexthub-dev-only-master-key" \
   -H "Content-Type: application/json" \

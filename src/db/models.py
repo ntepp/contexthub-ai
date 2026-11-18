@@ -269,6 +269,26 @@ class Message(Base):
 
 
 # ---------------------------------------------------------------------------
+# Instance settings
+# ---------------------------------------------------------------------------
+
+
+class InstanceSetting(Base):
+    """Administrator choices stored by ContextHub (ADR-002), one JSON value per key.
+
+    Only what ContextHub decides lives here (e.g. the models offered in the chat): never a
+    cost, a budget or a secret, which belong to the LLM gateway.
+    """
+
+    __tablename__ = "hub_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONType)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hub_users.id", ondelete="SET NULL"))
+
+
+# ---------------------------------------------------------------------------
 # Audit
 # ---------------------------------------------------------------------------
 

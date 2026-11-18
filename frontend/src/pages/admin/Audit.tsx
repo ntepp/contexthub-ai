@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { Download, ShieldCheck } from 'lucide-react'
 import { api, errorMessage, type AuditEvent } from '@/lib/api'
 import { cn, formatDateTime } from '@/lib/utils'
+import { formatBudgetWindow } from '@/lib/usage'
 import { Notice } from '@/components/ui/Notice'
 
 const ACTIONS: [string, string][] = [
@@ -12,6 +13,8 @@ const ACTIONS: [string, string][] = [
   ['collection.', 'Collections'],
   ['grant.', 'Droits'],
   ['user.', 'Utilisateurs'],
+  ['settings.', 'Réglages (modèles proposés)'],
+  ['budget.', 'Budgets'],
   ['audit.', 'Consultations du journal'],
 ]
 
@@ -43,6 +46,51 @@ const ACTION_LABELS: Record<string, string> = {
   'audit.export': 'Journal exporté',
   'audit.verify': 'Intégrité vérifiée',
   'retention.purge': 'Purge de conservation',
+  'settings.models_set': 'Modèles proposés modifiés',
+  'settings.models_reset': "Modèles : retour aux valeurs de l'environnement",
+  'budget.set': 'Budget défini',
+  'budget.remove': 'Budget retiré',
+}
+
+const BUDGET_PERIODS: Record<string, string> = { day: 'par jour', week: 'par semaine', month: 'sur 30 jours' }
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+/**
+ * "50 par semaine" from an audited budget; amounts carry no currency here. Current events:
+ * {limit, period_kind, period, managed}. Older ones: {limit, period} where `period` is either
+ * "day"/"week"/"month" or the gateway window ("7d").
+ */
+function budgetText(value: unknown): string | null {
+  const b = record(value)
+  if (!b || typeof b.limit !== 'number') return null
+  const amount = b.limit.toLocaleString('fr-FR', { maximumFractionDigits: 6 })
+  const kind = typeof b.period_kind === 'string' ? BUDGET_PERIODS[b.period_kind] : undefined
+  const window = typeof b.period === 'string' ? BUDGET_PERIODS[b.period] ?? `sur ${formatBudgetWindow(b.period)}` : ''
+  const period = kind ?? window
+  return `${amount} ${period}`.trim() + (b.managed === false ? ' (défini dans la passerelle LLM)' : '')
+}
+
+/** "3 modèles, défaut : ollama:mistral" from an audited model setting ({offered, default}). */
+function modelsText(value: unknown): string | null {
+  const m = record(value)
+  if (!m || !Array.isArray(m.offered)) return null
+  const n = m.offered.length
+  return `${n} modèle${n > 1 ? 's' : ''}${typeof m.default === 'string' ? `, défaut : ${m.default}` : ''}`
+}
+
+/** Old → new value of the setting and budget events. */
+function change(e: AuditEvent, d: Record<string, unknown>): string | null {
+  const describe = e.action.startsWith('budget.') ? budgetText : e.action.startsWith('settings.models') ? modelsText : null
+  if (!describe) return null
+  const budget = e.action.startsWith('budget.')
+  const after = describe(d.new) ?? (budget ? 'aucun budget' : "valeurs de l'environnement")
+  // A failed attempt records only what was asked.
+  if (!('old' in d)) return after
+  const before = describe(d.old) ?? (budget ? 'aucun budget' : "valeurs de l'environnement")
+  return `${before} → ${after}`
 }
 
 const PAGE = 50
@@ -50,6 +98,8 @@ const PAGE = 50
 function summary(e: AuditEvent): string {
   const d = (e.details ?? {}) as Record<string, unknown>
   if (e.action === 'query.ask' && typeof d.question === 'string') return d.question
+  const changed = change(e, d)
+  if (changed) return changed
   if (typeof d.filename === 'string') return d.filename
   if (typeof d.name === 'string') return d.name
   if (typeof d.email === 'string') return d.email

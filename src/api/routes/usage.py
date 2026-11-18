@@ -1,4 +1,5 @@
-"""LLM consumption, read from the gateway (ADR-001). ContextHub stores no cost.
+"""LLM consumption, read from the gateway (ADR-001), and per-user budgets driven on it
+(ADR-002). ContextHub stores no cost and no budget.
 
 The browser never talks to the gateway: these routes query it with a service key and
 filter by user here. ``/usage/me`` takes the user from the session, never from a
@@ -7,18 +8,28 @@ parameter.
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.api.deps import current_user, require_admin
+from src.api.deps import actor_of, current_user, require_admin
+from src.audit import service as audit
 from src.db.models import User
 from src.db.session import get_db
-from src.usage.base import UsageError, UsageReport
-from src.usage.registry import NO_ADMIN_KEY, build_usage_provider, usage_not_configured
+from src.usage.base import Budget, BudgetConflict, BudgetPeriod, UsageError, UsageReport
+from src.usage.registry import (
+    NO_ADMIN_KEY,
+    UNSUPPORTED_KIND,
+    budgets_not_configured,
+    build_budget_manager,
+    build_usage_provider,
+    usage_not_configured,
+)
 from src.utils.logging_config import get_logger
 
 log = get_logger()
@@ -32,8 +43,20 @@ NO_ADMIN_KEY_ADMIN = (
     "La lecture de la consommation n'est pas configurée : définissez LLM_GATEWAY_ADMIN_KEY "
     "(clé d'administrateur de la passerelle) puis redémarrez l'API."
 )
+NO_ADMIN_KEY_BUDGETS = (
+    "La gestion des budgets n'est pas configurée : définissez LLM_GATEWAY_ADMIN_KEY "
+    "(clé d'administrateur de la passerelle) puis redémarrez l'API."
+)
+NO_GATEWAY_BUDGETS = "Aucune passerelle LLM n'est configurée : les budgets ne peuvent pas être gérés."
+UNSUPPORTED_KIND_ADMIN = (
+    "Type de passerelle LLM non pris en charge (LLM_GATEWAY_KIND) : la consommation et les budgets "
+    "ne peuvent pas être lus. Valeur acceptée : litellm."
+)
 UNKNOWN_USER = "Utilisateur inconnu ou supprimé"
 EXTERNAL_ID = "Identifiant hors ContextHub"
+# /admin/usage reads the budgets of at most this many users (the biggest consumers first).
+MAX_BUDGET_LOOKUPS = 200
+MAX_BUDGET_LIMIT = 1_000_000.0
 
 
 def _period(start: date | None, end: date | None) -> tuple[date, date]:
@@ -78,8 +101,10 @@ async def my_usage(
     start, end = _period(start, end)
     provider = build_usage_provider()
     if provider is None:
-        missing_key = usage_not_configured() == NO_ADMIN_KEY
-        return {"available": False, "reason": NO_ADMIN_KEY_ME if missing_key else NOT_CONFIGURED}
+        why = usage_not_configured()
+        # Members get no configuration detail: an unsupported kind reads as "not configured yet".
+        reason = NO_ADMIN_KEY_ME if why in (NO_ADMIN_KEY, UNSUPPORTED_KIND) else NOT_CONFIGURED
+        return {"available": False, "reason": reason}
     try:
         report = await provider.user_usage(str(user.id), start, end)
     except UsageError as exc:
@@ -110,13 +135,23 @@ async def admin_usage(
     start, end = _period(start, end)
     provider = build_usage_provider()
     if provider is None:
-        missing_key = usage_not_configured() == NO_ADMIN_KEY
-        return {"available": False, "reason": NO_ADMIN_KEY_ADMIN if missing_key else NOT_CONFIGURED}
+        why = usage_not_configured()
+        reasons = {NO_ADMIN_KEY: NO_ADMIN_KEY_ADMIN, UNSUPPORTED_KIND: UNSUPPORTED_KIND_ADMIN}
+        return {"available": False, "reason": reasons.get(why, NOT_CONFIGURED)}
     try:
         report = await provider.global_usage(start, end)
     except UsageError as exc:
         raise _unavailable(exc)
     people = _people(db, [u.user_id for u in report.by_user])
+    budgets: dict[str, Budget | None] = {}
+    missing = list(report.missing)
+    manager = build_budget_manager()
+    if manager is not None and people:
+        wanted = [u.user_id for u in report.by_user if u.user_id in people]
+        batch = await manager.get_budgets(wanted[:MAX_BUDGET_LOOKUPS])
+        budgets = batch.budgets
+        if batch.failed or len(wanted) > MAX_BUDGET_LOOKUPS:
+            missing.append("budgets")
     by_user = []
     for usage in report.by_user:
         person = people.get(usage.user_id)
@@ -142,5 +177,128 @@ async def admin_usage(
                 "full_name": None,
                 "label": UNKNOWN_USER if is_uuid else EXTERNAL_ID,
             }
-        by_user.append({**entry, **usage.totals.as_dict()})
-    return {**_report(report, provider.kind), "by_user": by_user}
+        budget = budgets.get(usage.user_id) if person is not None else None
+        by_user.append({**entry, **usage.totals.as_dict(), "budget": budget.as_dict() if budget else None})
+    return {
+        **_report(report, provider.kind),
+        "missing": missing,
+        "by_user": by_user,
+        "budgets_available": manager is not None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-user budgets (ADR-002): held and enforced by the gateway
+# ---------------------------------------------------------------------------
+
+
+class BudgetSet(BaseModel):
+    limit: float
+    period: str
+
+
+def _target(db: Session, user_id: uuid.UUID) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    return user
+
+
+def _budget_reason() -> str:
+    reasons = {NO_ADMIN_KEY: NO_ADMIN_KEY_BUDGETS, UNSUPPORTED_KIND: UNSUPPORTED_KIND_ADMIN}
+    return reasons.get(budgets_not_configured(), NO_GATEWAY_BUDGETS)
+
+
+def _audited(budget: Budget | None) -> dict | None:
+    """Old and new values of budget events, in one shape; the limit and its window only,
+    never the spend."""
+    if budget is None:
+        return None
+    return {
+        "limit": budget.limit,
+        "period_kind": budget.period_kind.value if budget.period_kind else None,
+        "period": budget.period,
+        "managed": budget.managed,
+    }
+
+
+def _budget_response(user: User, budget: Budget | None, currency: str) -> dict:
+    return {
+        "available": True,
+        "user_id": str(user.id),
+        "currency": currency,
+        "budget": budget.as_dict() if budget else None,
+    }
+
+
+@router.get("/admin/users/{user_id}/budget")
+async def get_user_budget(user_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    user = _target(db, user_id)
+    manager = build_budget_manager()
+    if manager is None:
+        return {"available": False, "reason": _budget_reason()}
+    try:
+        return _budget_response(user, await manager.get_budget(str(user.id)), manager.currency)
+    except UsageError as exc:
+        raise _unavailable(exc)
+
+
+@router.put("/admin/users/{user_id}/budget")
+async def set_user_budget(
+    user_id: uuid.UUID,
+    body: BudgetSet,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    user = _target(db, user_id)
+    if not math.isfinite(body.limit) or body.limit <= 0:
+        raise HTTPException(status_code=422, detail="Le montant du budget doit être un nombre strictement positif.")
+    if body.limit > MAX_BUDGET_LIMIT:
+        raise HTTPException(status_code=422, detail="Le montant du budget ne peut pas dépasser 1 000 000.")
+    try:
+        period = BudgetPeriod(body.period)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Période inconnue : choisissez day (jour), week (semaine) ou month (30 jours).")
+    manager = build_budget_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail=_budget_reason())
+    limit = round(body.limit, 6)
+    actor = actor_of(request, admin)
+    try:
+        old = await manager.get_budget(str(user.id))
+        budget = await manager.set_budget(str(user.id), limit, period)
+    except UsageError as exc:
+        # What was asked, in the same shape (the gateway window is unknown: nothing was written).
+        asked = {"limit": limit, "period_kind": period.value, "period": None, "managed": True}
+        audit.record("budget.set", actor, outcome="failure", resource_type="user", resource_id=user.id, details={"new": asked})
+        raise _unavailable(exc)
+    audit.record(
+        "budget.set", actor, resource_type="user", resource_id=user.id, details={"old": _audited(old), "new": _audited(budget)}
+    )
+    return _budget_response(user, budget, manager.currency)
+
+
+@router.delete("/admin/users/{user_id}/budget")
+async def remove_user_budget(
+    user_id: uuid.UUID, request: Request, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+) -> dict:
+    user = _target(db, user_id)
+    manager = build_budget_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail=_budget_reason())
+    actor = actor_of(request, admin)
+    try:
+        old = await manager.get_budget(str(user.id))
+        await manager.remove_budget(str(user.id))
+        # Read back rather than assumed: shows what the gateway really kept.
+        budget = await manager.get_budget(str(user.id))
+    except BudgetConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except UsageError as exc:
+        audit.record("budget.remove", actor, outcome="failure", resource_type="user", resource_id=user.id)
+        raise _unavailable(exc)
+    audit.record(
+        "budget.remove", actor, resource_type="user", resource_id=user.id, details={"old": _audited(old), "new": _audited(budget)}
+    )
+    return _budget_response(user, budget, manager.currency)

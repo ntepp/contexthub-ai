@@ -14,10 +14,14 @@ Endpoints used (none Enterprise-gated):
   and the spend counted against it (https://docs.litellm.ai/docs/proxy/customers).
 
 ``/global/spend/report`` is Enterprise-only and deliberately not used.
+
+Budgets are written by ``src/usage/litellm_budgets.py``; both read them the same way
+(``customer_budget``).
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from typing import Any
 
@@ -26,6 +30,7 @@ import httpx
 from src.llm import gateway
 from src.usage.base import (
     Budget,
+    BudgetPeriod,
     DailyUsage,
     GlobalUsageReport,
     ModelUsage,
@@ -60,25 +65,63 @@ def _totals(metrics: Any) -> UsageTotals:
     )
 
 
-def _raise_for_status(resp: httpx.Response) -> None:
+# What a call is for, in the error messages: (infinitive, noun).
+CONSUMPTION = ("lire la consommation", "lecture de la consommation")
+BUDGETS = ("gérer les budgets", "gestion des budgets")
+
+# Budget windows ContextHub writes, in LiteLLM's duration format (``budget_duration``).
+BUDGET_DURATIONS = {BudgetPeriod.DAY: "1d", BudgetPeriod.WEEK: "7d", BudgetPeriod.MONTH: "30d"}
+_PERIOD_OF_DURATION = {v: k for k, v in BUDGET_DURATIONS.items()}
+
+
+def _raise_for_status(resp: httpx.Response, purpose: tuple[str, str] = CONSUMPTION) -> None:
     code = resp.status_code
     if code < 300:
         return
     if code < 400:
         raise UsageError(f"{SYSTEM} a répondu par une redirection : vérifiez LLM_GATEWAY_URL.")
-    if code in (401, 403) and "admin-only" in resp.text[:2000].lower():
-        # The remote text is only inspected, never shown.
+    # The remote text is only inspected, never shown.
+    text = resp.text[:2000].lower()
+    if (code in (401, 403) and "admin-only" in text) or (code == 400 and "not allowed" in text):
         raise UsageError(
-            f"{SYSTEM} exige une clé d'administrateur pour lire la consommation : "
+            f"{SYSTEM} exige une clé d'administrateur pour {purpose[0]} : "
             "LLM_GATEWAY_ADMIN_KEY doit être une clé d'administrateur de la passerelle."
         )
     if code in (401, 403):
-        raise UsageError(f"{SYSTEM} refuse la clé de service de ContextHub (lecture de la consommation).")
+        raise UsageError(f"{SYSTEM} refuse la clé de service de ContextHub ({purpose[1]}).")
     if code == 404:
-        raise UsageError(f"{SYSTEM} ne propose pas ce point d'accès de consommation (version de LiteLLM ?).")
+        raise UsageError(f"{SYSTEM} ne propose pas ce point d'accès ({purpose[1]}) : version de LiteLLM ?")
     if code == 429:
         raise UsageError(f"{SYSTEM} limite le débit des requêtes : réessayez dans un instant.")
+    if code < 500:
+        raise UsageError(f"{SYSTEM} a refusé la requête ({purpose[1]}, erreur {code}).")
     raise UsageError(f"{SYSTEM} est indisponible (erreur {code}).")
+
+
+def managed_budget_id(user_id: str) -> str:
+    """Id of the budget ContextHub owns for one user on the gateway (one budget per user,
+    never shared: changing it cannot affect anybody else)."""
+    return f"contexthub-{uuid.UUID(str(user_id))}"
+
+
+def customer_budget(data: dict | None, user_id: str) -> Budget | None:
+    """The budget of a ``/customer/info`` answer, None when it has no limit."""
+    if not data:
+        return None
+    table = data.get("litellm_budget_table") if isinstance(data.get("litellm_budget_table"), dict) else {}
+    limit = table.get("max_budget")
+    if limit is None:
+        return None
+    duration = table.get("budget_duration") or None
+    budget_id = data.get("budget_id") or table.get("budget_id")
+    return Budget(
+        limit=_num(limit),
+        spent=_num(data.get("spend")),
+        period=duration,
+        resets_at=data.get("budget_reset_at") or table.get("budget_reset_at") or None,
+        period_kind=_PERIOD_OF_DURATION.get(duration) if isinstance(duration, str) else None,
+        managed=budget_id == managed_budget_id(user_id),
+    )
 
 
 class LiteLLMUsageProvider:
@@ -171,18 +214,7 @@ class LiteLLMUsageProvider:
         async with self._client() as client:
             # 400/404: the gateway has never seen this customer, hence no budget of its own.
             data = await self._get(client, "/customer/info", {"end_user_id": user_id}, allow=(400, 404))
-        if not data:
-            return None
-        table = data.get("litellm_budget_table") if isinstance(data.get("litellm_budget_table"), dict) else {}
-        limit = table.get("max_budget")
-        if limit is None:
-            return None
-        return Budget(
-            limit=_num(limit),
-            spent=_num(data.get("spend")),
-            period=table.get("budget_duration") or None,
-            resets_at=data.get("budget_reset_at") or table.get("budget_reset_at") or None,
-        )
+        return customer_budget(data, user_id)
 
     async def user_usage(self, user_id: str, start: date, end: date) -> UsageReport:
         report = UsageReport(start=start, end=end)

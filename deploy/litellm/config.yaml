@@ -9,6 +9,15 @@
 model_list:
   # Local model served by Ollama on the host: nothing leaves the machine. Its name matches
   # ContextHub's default LLM_MODEL_NAME, so it is the default model in the UI.
+  # Local model installed on the host (`ollama list`). "ollama_chat/" uses Ollama's native
+  # chat API, which honours `think: false`: qwen3.5 otherwise reasons before every answer
+  # (tens of seconds on a laptop GPU), three times per question (condense, plan, generate).
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: ollama_chat/qwen3.5:9b
+      api_base: os.environ/OLLAMA_API_BASE
+      think: false
+      keep_alive: 30m
   - model_name: llama3.1:8b
     litellm_params:
       model: ollama/llama3.1:8b
@@ -47,6 +56,10 @@ general_settings:
   proxy_batch_write_at: 10
 
 litellm_settings:
+  # Default budget of every end user without a budget of their own, including users the
+  # gateway has never seen (first question). Created once with POST /budget/new
+  # (see README); raise or lower it there, not here.
+  max_end_user_budget_id: contexthub-default
   # Drop parameters a provider does not support instead of failing the call.
   drop_params: true
   # Callbacks (if any are added) receive metadata only, never message contents.

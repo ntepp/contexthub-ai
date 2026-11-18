@@ -5,8 +5,10 @@ import { errorMessage, type ModelUsage, type UsageBudget, type UsageReport, type
 import { cn } from '@/lib/utils'
 import {
   PERIOD_PRESETS,
+  budgetPeriodLabel,
+  budgetRatio,
+  budgetTone,
   chartSeries,
-  formatBudgetWindow,
   formatCompact,
   formatCost,
   formatDateTimeLong,
@@ -401,11 +403,31 @@ export function ModelTable({ rows, total, currency }: { rows: ModelUsage[]; tota
 
 // ---------------------------------------------------------------- budget
 
+/** Thin bar of the share consumed, with the thresholds of the budget pages. */
+export function BudgetBar({ budget, label, className }: { budget: UsageBudget; label: string; className?: string }) {
+  const ratio = budgetRatio(budget)
+  if (ratio === null) return null
+  const percent = Math.round(Math.min(ratio, 1) * 100)
+  return (
+    <div
+      className={cn('h-1.5 overflow-hidden rounded-full bg-wash', className)}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-valuetext={`${percent} % du budget consommé`}
+    >
+      <div className={cn('h-full rounded-full', budgetTone(ratio))} style={{ width: `${percent}%` }} />
+    </div>
+  )
+}
+
 export function BudgetSummary({ budget, currency }: { budget: UsageBudget; currency: string }) {
   const { limit, spent, remaining } = budget
-  const ratio = limit !== null && spent !== null ? (limit > 0 ? spent / limit : spent > 0 ? 1 : 0) : null
+  const ratio = budgetRatio(budget)
   const percent = ratio === null ? null : Math.round(Math.min(ratio, 1) * 100)
-  const tone = ratio === null ? 'bg-ledger' : ratio >= 1 ? 'bg-danger' : ratio >= 0.8 ? 'bg-refusal' : 'bg-ledger'
+  const window = budgetPeriodLabel(budget)
 
   return (
     <div className="rounded-lg border border-rule bg-surface p-4">
@@ -430,11 +452,11 @@ export function BudgetSummary({ budget, currency }: { budget: UsageBudget; curre
           aria-valuenow={percent}
           aria-valuetext={`${percent} % du budget consommé`}
         >
-          <div className={cn('h-full rounded-full', tone)} style={{ width: `${percent}%` }} />
+          <div className={cn('h-full rounded-full', budgetTone(ratio))} style={{ width: `${percent}%` }} />
         </div>
       )}
       <p className="mt-3 text-xs text-slate">
-        {budget.period ? `Budget sur ${formatBudgetWindow(budget.period)}, décompté par la passerelle LLM` : 'Budget décompté par la passerelle LLM'}
+        {window ? `Budget ${window}${budget.period_kind === 'month' ? ' glissants' : ''}, décompté par la passerelle LLM` : 'Budget décompté par la passerelle LLM'}
         {budget.resets_at ? `, remis à zéro le ${formatDateTimeLong(budget.resets_at)}.` : '.'} Ce décompte suit sa propre
         période, indépendamment de celle choisie ci-dessus.
       </p>
