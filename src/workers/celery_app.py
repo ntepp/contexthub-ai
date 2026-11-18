@@ -7,6 +7,11 @@ from src.config import get_settings
 
 settings = get_settings()
 
+# Scanned documents are read on their own queue, consumed by a dedicated worker
+# (python -m src.workers.ocr_worker): a text document never waits behind an OCR job.
+DEFAULT_QUEUE = "celery"
+OCR_QUEUE = "ocr"
+
 celery_app = Celery(
     "contexthub",
     broker=settings.redis_db_url(0),
@@ -23,6 +28,8 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    task_default_queue=DEFAULT_QUEUE,
+    task_routes={"src.workers.tasks.ocr_document": {"queue": OCR_QUEUE}},
     beat_schedule={
         "purge-expired-data": {
             "task": "src.workers.tasks.purge_expired",

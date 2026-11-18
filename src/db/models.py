@@ -182,6 +182,12 @@ class Document(Base):
     warnings: Mapped[list | None] = mapped_column(JSONType)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
+    # How the text was read (ADR-003): "native", "ocr" or "partial" (some pages badly read
+    # or unread); None until the document is indexed.
+    read_mode: Mapped[str | None] = mapped_column(String(16))
+    ocr_pages: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float)
+    ocr_low_pages: Mapped[list | None] = mapped_column(JSONType)  # 1-based page numbers
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     task_id: Mapped[str | None] = mapped_column(String(255))

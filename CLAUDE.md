@@ -14,7 +14,8 @@ legal, quality, compliance…). Generic: no business logic hard-coded; per-deplo
 ```bash
 start.bat | ./start.sh                     # dev: PostgreSQL+Redis (docker-compose.dev.yaml), migrations, API, worker, Vite
 uvicorn src.app:app --reload               # API (http://localhost:8000/docs)
-celery -A src.workers.celery_app worker --loglevel=info
+celery -A src.workers.celery_app worker --loglevel=info   # default queue only
+python -m src.workers.ocr_worker                           # queue "ocr" (scanned documents), OCR_WORKER_CONCURRENCY
 cd frontend && npm run dev                 # UI (http://localhost:5173, /api proxied to :8000)
 alembic upgrade head
 python -m src.cli create-admin|verify-audit|purge|reindex
@@ -43,15 +44,16 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), SSO groups stored on the user at each login, rate limiter (Redis, in-memory fallback) |
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
-| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002) |
-| `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002); `69ab4257` = OCR quality on `hub_documents` (`read_mode`, `ocr_pages`, `ocr_confidence`, `ocr_low_pages`, ADR-003) |
+| `src/ingestion/` | `filetypes` (sniffing, image magic numbers), `loaders` (PDF with page-by-page OCR of poor pages, JPG/PNG/TIFF images, DOCX, TXT/MD, HTML; `OcrOptions`, `OcrRequired`), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids; offered models = `hub_settings` key `models` if set (`model_offer()`, checked against `available_catalogue()`), else `LLM_MODELS` / gateway catalogue; Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/instance_settings.py` | `get` / `put` / `delete` of `hub_settings` (JSON per key), 5 s in-process cache (expires by itself: several workers), read errors fall back on the environment |
 | `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
-| `src/workers/` | Celery app + `ingest_document(document_id)` (backoff on transient errors only) + nightly `purge_expired` |
+| `src/ocr/` | ADR-003. `base` (`OcrEngine` protocol, `OcrError`), `tesseract` (default local adapter, every failure mapped to `OcrError`), `registry` (`get_ocr_engine()`, test override, `engine_check()` for `/admin/system`), `preprocess` (grayscale, upscale, deskew, blank page; Pillow only), `reader` (`read_page`: orientation, confidence) |
+| `src/workers/` | Celery app + `ingest_document(document_id)` (default queue, backoff on transient errors only; hands documents with pages to OCR to `ocr_document`, routed to queue `ocr`) + `ocr_worker` launcher + nightly `purge_expired` |
 | `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
 
@@ -68,6 +70,9 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - `plan` runs only after `retrieve` kept something for the question itself (refusals stay LLM-free); the
   question's own ranking always comes first in the merge and a bad planner reply falls back to it.
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
+- OCR runs only on the `ocr` queue (`ocr_document`); the default worker never consumes it, so a
+  text document never waits behind a scan. OCR engine failures are `OcrError`, never `OSError`
+  (which the tasks retry as transient). No OCR engine sends data off the server by default.
 - Every collection access goes through `load_collection()` / `accessible_collections()`; inaccessible
   collections answer 404. Retrieval filters by collection ids in SQL.
 - A user's access to a collection is the best of: personal grant, SSO group grant
@@ -92,7 +97,8 @@ docker compose up -d --build               # production stack (docker-compose.ya
 ## Tests
 
 `tests/conftest.py` sets env vars before importing `src`, uses SQLite in-memory, `InMemoryChunkStore`,
-`HashEmbeddings` and `ScriptedChatModel` (`tests/fakes.py`), Celery eager mode. `tests/test_pg.py`
+`HashEmbeddings` and `ScriptedChatModel` (`tests/fakes.py`), Celery eager mode, OCR disabled (`FakeOcrEngine` + `set_ocr_engine_override()` in
+`tests/test_ocr.py`; the real-Tesseract tests are skipped when the binary is absent). `tests/test_pg.py`
 (marker `pg`) migrates a real database from scratch. `tests/e2e/` (marker `e2e`) drives the running UI with
 Playwright: agentic retrieval, definition chunking and refusal on the HR corpus; connectors against
 `tests/e2e/mock_confluence.py`. Connector unit tests replace the remote systems with

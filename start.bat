@@ -20,6 +20,9 @@ echo [5/5] Starting services in separate windows...
 start "Celery Worker" cmd /k "venv\Scripts\celery -A src.workers.celery_app worker --loglevel=info"
 timeout /t 2 /nobreak >nul
 
+start "OCR Worker" cmd /k "venv\Scripts\python -m src.workers.ocr_worker"
+timeout /t 2 /nobreak >nul
+
 start "FastAPI Backend" cmd /k "venv\Scripts\uvicorn src.app:app --reload"
 timeout /t 2 /nobreak >nul
 

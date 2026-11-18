@@ -17,9 +17,12 @@ alembic upgrade head
 
 echo "[4/4] Starting services..."
 
-# Celery worker
+# Celery workers: default queue, and the "ocr" queue for scanned documents (so that a
+# text document never waits behind a long scan).
 celery -A src.workers.celery_app worker --loglevel=info &
 CELERY_PID=$!
+python -m src.workers.ocr_worker &
+OCR_PID=$!
 
 # FastAPI backend
 uvicorn src.app:app --reload &
@@ -37,6 +40,6 @@ echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Trap Ctrl+C and kill all background processes
-trap "echo 'Stopping...'; kill $CELERY_PID $UVICORN_PID $FRONTEND_PID 2>/dev/null; docker compose -f docker-compose.dev.yaml stop; exit 0" INT
+trap "echo 'Stopping...'; kill $CELERY_PID $OCR_PID $UVICORN_PID $FRONTEND_PID 2>/dev/null; docker compose -f docker-compose.dev.yaml stop; exit 0" INT
 
 wait

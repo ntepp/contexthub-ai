@@ -6,9 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Tesseract (+ French and English data) for OCR of scanned PDFs.
+# Tesseract (+ French and English data, osd for page orientation) for scanned documents.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng tesseract-ocr-osd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

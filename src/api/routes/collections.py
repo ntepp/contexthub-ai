@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import io
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,7 @@ from src.db.models import (
     ACCESS_EDITOR,
     ACCESS_VIEWER,
     DOC_FAILED,
+    DOC_PROCESSING,
     DOC_QUEUED,
     Collection,
     Document,
@@ -23,9 +25,10 @@ from src.db.models import (
 )
 from src.db.session import get_db
 from src.ingestion import storage
-from src.ingestion.filetypes import IngestionError, extension_of, mime_for, sniff
+from src.ingestion.filetypes import IMAGE_TYPES, OCR_TYPES, IngestionError, extension_of, mime_for, sniff
 from src.ingestion.url_fetch import validate_url
 from src.observability.metrics import UPLOADS
+from src.ocr.registry import ocr_ready
 from src.retrieval.store import get_store
 from src.utils.logging_config import get_logger
 
@@ -46,6 +49,15 @@ class CollectionUpdate(BaseModel):
 
 class UrlImport(BaseModel):
     url: str = Field(max_length=2000)
+
+
+class OcrRun(BaseModel):
+    # PDF: read every page by OCR, not only those without a usable text layer.
+    all_pages: bool = False
+
+
+# Longest side of a page image sent to the viewer.
+_PAGE_PREVIEW_PIXELS = 2000
 
 
 def serialize_collection(collection: Collection, access: str, document_count: int = 0) -> dict:
@@ -74,6 +86,11 @@ def serialize_document(doc: Document) -> dict:
         "warnings": doc.warnings or [],
         "chunk_count": doc.chunk_count,
         "page_count": doc.page_count,
+        "read_mode": doc.read_mode,
+        "ocr_pages": doc.ocr_pages or 0,
+        "ocr_confidence": doc.ocr_confidence,
+        "ocr_low_pages": doc.ocr_low_pages or [],
+        "ocr_eligible": doc.mime_type in OCR_TYPES and doc.storage_path is not None,
         "progress": {"current": doc.progress_current, "total": doc.progress_total},
         "has_file": storage.resolve_stored(doc.storage_path) is not None,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
@@ -82,10 +99,15 @@ def serialize_document(doc: Document) -> dict:
 
 
 def dispatch_ingestion(db: Session, doc: Document) -> None:
-    from src.workers.tasks import ingest_document
+    """Images go straight to the "ocr" queue; any other document starts on the default queue
+    (a PDF with scanned pages is handed over to the "ocr" queue by the worker)."""
+    from src.workers.tasks import ingest_document, ocr_document
 
     try:
-        task = ingest_document.delay(str(doc.id))
+        if doc.mime_type in IMAGE_TYPES and ocr_ready():
+            task = ocr_document.delay(str(doc.id))
+        else:
+            task = ingest_document.delay(str(doc.id))
     except Exception:
         log.exception("[upload] file d'attente indisponible")
         doc.status = DOC_FAILED
@@ -208,7 +230,9 @@ def upload_document(
     filename = (file.filename or "document").replace("\\", "/").rsplit("/", 1)[-1][:255] or "document"
     mime = mime_for(filename)
     if mime is None:
-        raise HTTPException(status_code=415, detail="Format non supporté (PDF, DOCX, TXT, MD, HTML).")
+        raise HTTPException(
+            status_code=415, detail="Format non supporté (PDF, DOCX, TXT, MD, HTML, JPG, PNG, TIFF)."
+        )
 
     try:
         staged = storage.stage_stream(file.file, settings.upload_max_bytes)
@@ -332,6 +356,54 @@ def download_document(
     )
 
 
+@router.get("/documents/{document_id}/pages/{page}")
+def document_page_image(
+    document_id: uuid.UUID,
+    page: int,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """One page of an imported image (TIFF frame) as PNG, so that a citation opens the right
+    page in any browser (most cannot display TIFF). PDFs keep the PDF viewer (``/file#page=``)."""
+    from PIL import Image, ImageOps
+
+    doc = _load_document(db, user, document_id, ACCESS_VIEWER)
+    if doc.mime_type not in IMAGE_TYPES:
+        raise HTTPException(status_code=409, detail="Aperçu par page réservé aux images importées.")
+    path = storage.resolve_stored(doc.storage_path)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Fichier original indisponible.")
+    try:
+        with Image.open(path) as image:
+            if page < 1 or page > getattr(image, "n_frames", 1):
+                raise HTTPException(status_code=404, detail="Page introuvable.")
+            image.seek(page - 1)
+            frame = ImageOps.exif_transpose(image.copy()) or image.copy()
+    except HTTPException:
+        raise
+    except (Image.DecompressionBombError, OSError, ValueError, EOFError):
+        raise HTTPException(status_code=422, detail="Image illisible.")
+    if frame.mode not in ("RGB", "L"):
+        frame = frame.convert("RGB")
+    frame.thumbnail((_PAGE_PREVIEW_PIXELS, _PAGE_PREVIEW_PIXELS))
+    buffer = io.BytesIO()
+    frame.save(buffer, format="PNG", optimize=True)
+    audit.record(
+        "document.view",
+        actor_of(request, user),
+        resource_type="document",
+        resource_id=doc.id,
+        collection_id=doc.collection_id,
+        details={"page": page},
+    )
+    return Response(
+        buffer.getvalue(),
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.delete("/documents/{document_id}")
 def delete_document(
     document_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
@@ -373,3 +445,46 @@ def reindex_document(
     )
     dispatch_ingestion(db, doc)
     return serialize_document(doc)
+
+
+@router.post("/documents/{document_id}/ocr", status_code=202)
+def rerun_ocr(
+    document_id: uuid.UUID,
+    request: Request,
+    body: OcrRun | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Read the document again by OCR on the "ocr" queue (idempotent, like a reindex)."""
+    from src.workers.tasks import dispatch_ocr
+
+    doc = _load_document(db, user, document_id, ACCESS_EDITOR)
+    all_pages = bool(body and body.all_pages)
+    if doc.mime_type not in OCR_TYPES:
+        raise HTTPException(status_code=409, detail="L'OCR ne s'applique qu'aux PDF et aux images.")
+    if storage.resolve_stored(doc.storage_path) is None:
+        raise HTTPException(status_code=409, detail="Aucun fichier source : supprimez puis réimportez ce document.")
+    if doc.status in (DOC_QUEUED, DOC_PROCESSING):
+        raise HTTPException(status_code=409, detail="Ce document est déjà en cours d'indexation.")
+    if not ocr_ready():
+        raise HTTPException(status_code=503, detail="OCR indisponible sur le serveur (désactivé ou Tesseract absent).")
+    doc.error_message = None
+    db.commit()
+    audit.record(
+        "document.ocr",
+        actor_of(request, user),
+        resource_type="document",
+        resource_id=doc.id,
+        collection_id=doc.collection_id,
+        details={"all_pages": all_pages},
+    )
+    try:
+        dispatch_ocr(str(doc.id), all_pages=all_pages)
+    except Exception:
+        log.exception("[ocr] file d'attente indisponible")
+        doc.status = DOC_FAILED
+        doc.error_message = "File d'attente OCR indisponible : réessayez plus tard."
+        db.commit()
+        raise HTTPException(status_code=503, detail="Service d'indexation indisponible.")
+    db.expire_all()
+    return serialize_document(db.get(Document, doc.id))

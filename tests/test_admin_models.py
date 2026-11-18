@@ -53,7 +53,7 @@ def test_settings_table_and_migration():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_current_head() == "69ab4256"
+    assert "69ab4256" in {r.revision for r in script.walk_revisions()}  # later lots add revisions on top
     assert script.get_revision("69ab4256").down_revision == "69ab4255"
 
 

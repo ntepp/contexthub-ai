@@ -16,9 +16,25 @@ SUPPORTED_TYPES: dict[str, str] = {
     ".md": "text/markdown",
     ".html": "text/html",
     ".htm": "text/html",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
 }
 
 TEXT_TYPES = {"text/plain", "text/markdown", "text/html"}
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/tiff"}
+# Formats that may need OCR: every image, and PDFs with scanned pages.
+OCR_TYPES = IMAGE_TYPES | {"application/pdf"}
+
+# Magic numbers of the accepted images (TIFF: little/big endian, classic and BigTIFF).
+_IMAGE_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/tiff": (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"),
+}
+_IMAGE_LABELS = {"image/jpeg": "JPEG", "image/png": "PNG", "image/tiff": "TIFF"}
 
 
 class IngestionError(Exception):
@@ -50,6 +66,10 @@ def sniff(path: Path, declared_mime: str) -> None:
                     raise IngestionError("Archive .docx sans contenu Word.")
         except zipfile.BadZipFile as exc:
             raise IngestionError("Document Word corrompu.") from exc
+        return
+    if declared_mime in IMAGE_TYPES:
+        if not head.startswith(_IMAGE_SIGNATURES[declared_mime]):
+            raise IngestionError(f"Le fichier n'est pas une image {_IMAGE_LABELS[declared_mime]} valide.")
         return
     if declared_mime in TEXT_TYPES:
         if b"\x00" in head:
