@@ -55,6 +55,11 @@ fournisseurs cloud autorisés).
 - Rôles globaux : `admin` (tous les droits) et `member`.
 - Droits par collection : `viewer` (interroger) et `editor` (importer, supprimer des documents).
   Une collection peut être « ouverte » (lecture pour tous les membres).
+- Droits par groupe de l'annuaire : une collection peut être ouverte à un groupe SSO. Les groupes
+  viennent du jeton d'identité (signature vérifiée) et sont relus à chaque connexion ; un
+  utilisateur retiré d'un groupe perd l'accès à sa prochaine connexion, au plus tard à
+  l'expiration de sa session (`SESSION_TTL_MINUTES`, 8 h). Pour un retrait immédiat, désactivez
+  le compte dans *Administration › Utilisateurs*.
 - Une collection non autorisée répond 404 : son existence n'est pas divulguée.
 - Le périmètre de recherche est filtré **dans la requête SQL** : un passage d'une collection non
   autorisée ne peut pas entrer dans le contexte du LLM.

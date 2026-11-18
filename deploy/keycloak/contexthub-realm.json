@@ -1,0 +1,84 @@
+{
+  "realm": "contexthub",
+  "displayName": "ACME (démo ContextHub)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "internationalizationEnabled": true,
+  "supportedLocales": ["fr", "en"],
+  "defaultLocale": "fr",
+  "groups": [
+    { "name": "contexthub-admins" },
+    { "name": "rh" },
+    { "name": "juridique" }
+  ],
+  "clients": [
+    {
+      "clientId": "contexthub",
+      "name": "ContextHub AI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "contexthub-dev-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/api/auth/oidc/callback"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@acme.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Martin",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "alice-demo-2026", "temporary": false }],
+      "groups": ["/rh"]
+    },
+    {
+      "username": "bob",
+      "email": "bob@acme.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Durand",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "bob-demo-2026", "temporary": false }],
+      "groups": ["/contexthub-admins"]
+    },
+    {
+      "username": "chloe",
+      "email": "chloe@acme.test",
+      "emailVerified": true,
+      "firstName": "Chloé",
+      "lastName": "Bernard",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "chloe-demo-2026", "temporary": false }],
+      "groups": ["/juridique"]
+    }
+  ]
+}

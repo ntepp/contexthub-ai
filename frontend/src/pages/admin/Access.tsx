@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, errorMessage, type Collection, type Grant, type User } from '@/lib/api'
+import { api, errorMessage, type Collection, type Grant, type GroupGrant, type User } from '@/lib/api'
 import { Notice } from '@/components/ui/Notice'
 
 export function Access() {
@@ -10,8 +10,16 @@ export function Access() {
   const [newUser, setNewUser] = useState('')
   const [newLevel, setNewLevel] = useState<'viewer' | 'editor'>('viewer')
   const [error, setError] = useState<string | null>(null)
+  const [groupGrants, setGroupGrants] = useState<GroupGrant[]>([])
+  const [knownGroups, setKnownGroups] = useState<string[]>([])
+  const [newGroup, setNewGroup] = useState('')
+  const [newGroupLevel, setNewGroupLevel] = useState<'viewer' | 'editor'>('viewer')
 
   useEffect(() => {
+    api
+      .ssoGroups()
+      .then(setKnownGroups)
+      .catch(() => {})
     api.collections().then((list) => {
       setCollections(list)
       setSelected((s) => s || list[0]?.id || '')
@@ -19,7 +27,10 @@ export function Access() {
     api.users().then(setUsers)
   }, [])
 
-  const load = () => (selected ? api.grants(selected).then(setGrants) : Promise.resolve())
+  const load = () =>
+    selected
+      ? Promise.all([api.grants(selected).then(setGrants), api.groupGrants(selected).then(setGroupGrants)])
+      : Promise.resolve()
   useEffect(() => {
     load()
   }, [selected])
@@ -138,6 +149,103 @@ export function Access() {
           }
         >
           Donner l'accès
+        </button>
+      </div>
+
+      <h2 className="mb-1 mt-10 text-base font-semibold">Groupes de l'annuaire (SSO)</h2>
+      <p className="mb-4 text-sm text-slate">
+        Tous les membres d'un groupe accèdent à la collection dès leur connexion par SSO. L'appartenance est relue à
+        chaque connexion : quitter le groupe dans l'annuaire retire l'accès à la connexion suivante.
+      </p>
+      <table className="mb-6 w-full border-collapse bg-surface">
+        <thead>
+          <tr>
+            <th className="table-head">Groupe</th>
+            <th className="table-head">Droit</th>
+            <th className="table-head" />
+          </tr>
+        </thead>
+        <tbody>
+          {groupGrants.length === 0 && (
+            <tr>
+              <td className="table-cell text-slate" colSpan={3}>
+                Aucun groupe n'a accès à cette collection.
+              </td>
+            </tr>
+          )}
+          {groupGrants.map((g) => (
+            <tr key={g.group}>
+              <td className="table-cell">{g.group}</td>
+              <td className="table-cell">
+                <select
+                  className="rounded border border-rule bg-surface px-1.5 py-1 text-sm"
+                  value={g.level}
+                  onChange={(e) => run(() => api.setGroupGrant(selected, g.group, e.target.value as 'viewer' | 'editor'))}
+                  aria-label={`Droit du groupe ${g.group}`}
+                >
+                  <option value="viewer">Lecture : peut interroger</option>
+                  <option value="editor">Modification : peut aussi importer et supprimer</option>
+                </select>
+              </td>
+              <td className="table-cell text-right">
+                <button
+                  className="btn-ghost px-2 py-1 text-xs text-danger"
+                  onClick={() => run(() => api.revokeGroupGrant(selected, g.group))}
+                >
+                  Retirer
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-rule bg-surface p-4">
+        <div className="min-w-56 flex-1">
+          <label className="label" htmlFor="acc-group">
+            Donner accès au groupe
+          </label>
+          <input
+            id="acc-group"
+            className="input"
+            list="acc-known-groups"
+            value={newGroup}
+            onChange={(e) => setNewGroup(e.target.value)}
+            placeholder="Nom du groupe, tel que transmis par l'annuaire"
+          />
+          <datalist id="acc-known-groups">
+            {knownGroups
+              .filter((g) => !groupGrants.some((x) => x.group === g))
+              .map((g) => (
+                <option key={g} value={g} />
+              ))}
+          </datalist>
+        </div>
+        <div>
+          <label className="label" htmlFor="acc-group-level">
+            Droit
+          </label>
+          <select
+            id="acc-group-level"
+            className="input"
+            value={newGroupLevel}
+            onChange={(e) => setNewGroupLevel(e.target.value as 'viewer' | 'editor')}
+          >
+            <option value="viewer">Lecture</option>
+            <option value="editor">Modification</option>
+          </select>
+        </div>
+        <button
+          className="btn-primary"
+          disabled={!newGroup.trim()}
+          onClick={() =>
+            run(async () => {
+              await api.setGroupGrant(selected, newGroup.trim(), newGroupLevel)
+              setNewGroup('')
+            })
+          }
+        >
+          Donner l'accès au groupe
         </button>
       </div>
     </section>

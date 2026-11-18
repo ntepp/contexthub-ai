@@ -27,6 +27,7 @@ from src.db.models import (
     ROLE_MEMBER,
     Collection,
     CollectionGrant,
+    CollectionGroupGrant,
     Conversation,
     Document,
     Message,
@@ -50,6 +51,11 @@ class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, max_length=255)
     role: str | None = Field(default=None, pattern=f"^({ROLE_ADMIN}|{ROLE_MEMBER})$")
     is_active: bool | None = None
+
+
+class GroupGrantSet(BaseModel):
+    group: str = Field(min_length=1, max_length=255)
+    level: str = Field(pattern=f"^({ACCESS_VIEWER}|{ACCESS_EDITOR})$")
 
 
 class GrantSet(BaseModel):
@@ -226,6 +232,92 @@ def revoke_grant(
     db.delete(grant)
     db.commit()
     audit.record("grant.revoke", actor_of(request, admin), resource_type="user", resource_id=user_id, collection_id=collection_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SSO group grants
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sso-groups")
+def known_sso_groups(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> list[str]:
+    """Groups seen on SSO logins so far (suggestions; any group name can be granted)."""
+    found: set[str] = set()
+    for groups in db.execute(select(User.oidc_groups).where(User.oidc_groups.is_not(None))).scalars():
+        found.update(g for g in groups or [] if isinstance(g, str))
+    return sorted(found)
+
+
+@router.get("/collections/{collection_id}/group-grants")
+def list_group_grants(collection_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    collection = _collection(db, collection_id)
+    rows = db.execute(
+        select(CollectionGroupGrant)
+        .where(CollectionGroupGrant.collection_id == collection.id)
+        .order_by(CollectionGroupGrant.group_name)
+    ).scalars()
+    return [{"group": g.group_name, "level": g.level} for g in rows]
+
+
+@router.put("/collections/{collection_id}/group-grants")
+def set_group_grant(
+    collection_id: uuid.UUID,
+    body: GroupGrantSet,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    collection = _collection(db, collection_id)
+    group = body.group.strip()
+    if not group:
+        raise HTTPException(status_code=422, detail="Nom de groupe vide.")
+    grant = db.execute(
+        select(CollectionGroupGrant).where(
+            CollectionGroupGrant.collection_id == collection.id, CollectionGroupGrant.group_name == group
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        db.add(CollectionGroupGrant(collection_id=collection.id, group_name=group, level=body.level))
+    else:
+        grant.level = body.level
+    db.commit()
+    audit.record(
+        "grant.group_set",
+        actor_of(request, admin),
+        resource_type="group",
+        resource_id=group,
+        collection_id=collection.id,
+        details={"group": group, "level": body.level},
+    )
+    return {"ok": True}
+
+
+@router.delete("/collections/{collection_id}/group-grants")
+def revoke_group_grant(
+    collection_id: uuid.UUID,
+    request: Request,
+    group: str = Query(min_length=1, max_length=255),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    grant = db.execute(
+        select(CollectionGroupGrant).where(
+            CollectionGroupGrant.collection_id == collection_id, CollectionGroupGrant.group_name == group
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Droit introuvable.")
+    db.delete(grant)
+    db.commit()
+    audit.record(
+        "grant.group_revoke",
+        actor_of(request, admin),
+        resource_type="group",
+        resource_id=group,
+        collection_id=collection_id,
+        details={"group": group},
+    )
     return {"ok": True}
 
 

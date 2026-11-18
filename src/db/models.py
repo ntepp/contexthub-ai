@@ -58,6 +58,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auth_provider: Mapped[str] = mapped_column(String(20), default="local")
     oidc_subject: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # Groups carried by the last SSO login (claim OIDC_GROUPS_CLAIM); they open the
+    # collections granted to those groups. Empty for password accounts.
+    oidc_groups: Mapped[list | None] = mapped_column(JSONType)
     # Bumped to revoke every outstanding session of the user.
     session_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -132,6 +135,21 @@ class CollectionGrant(Base):
 
     collection: Mapped[Collection] = relationship(back_populates="grants")
     user: Mapped[User] = relationship(back_populates="grants")
+
+
+class CollectionGroupGrant(Base):
+    """Access given to every member of an SSO group, re-evaluated at each login."""
+
+    __tablename__ = "hub_collection_group_grants"
+    __table_args__ = (UniqueConstraint("collection_id", "group_name", name="uq_group_grant_collection_group"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hub_collections.id", ondelete="CASCADE"), index=True
+    )
+    group_name: Mapped[str] = mapped_column(String(255), index=True)
+    level: Mapped[str] = mapped_column(String(20), default=ACCESS_VIEWER)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 DOC_QUEUED = "queued"

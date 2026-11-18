@@ -24,6 +24,7 @@ ruff check src eval tests
 pytest                                     # SQLite + fakes, no external service
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/contexthub_test pytest   # + real pgvector tests
 python -m tests.e2e.mock_confluence        # stand-in Confluence for demos and the connector e2e test (token "e2e-token")
+docker compose -f docker-compose.dev.yaml --profile sso up -d   # local Keycloak with demo accounts (deploy/keycloak/README.md); E2E_SSO=1 runs its e2e test
 E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=... E2E_PASSWORD=... pytest -m e2e   # UI scenario (Playwright + Chrome, running stack)
 cd frontend && npm run build               # tsc strict + vite
 
@@ -38,10 +39,10 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/app.py` | `create_app()`: middleware (request id, metrics, security headers), generic error handlers, routers |
 | `src/api/deps.py` | Auth (session cookie or `Bearer chk_` API key), CSRF header check, `load_collection(db, user, id, minimum)` access control |
 | `src/api/routes/` | `auth`, `collections` (+ documents), `chat` (+ conversations, models), `connectors` (admin connections, `/chat/sources`), `admin`, `health` |
-| `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), rate limiter (Redis, in-memory fallback) |
+| `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), SSO groups stored on the user at each login, rate limiter (Redis, in-memory fallback) |
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
-| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`) |
+| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants |
 | `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
@@ -66,6 +67,8 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
 - Every collection access goes through `load_collection()` / `accessible_collections()`; inaccessible
   collections answer 404. Retrieval filters by collection ids in SQL.
+- A user's access to a collection is the best of: personal grant, SSO group grant
+  (`CollectionGroupGrant` matched against `User.oidc_groups`, refreshed at every SSO login), open collection.
 - Connector pages live in a **session collection** (`Collection.conversation_id` set): never listed,
   granted or opened directly — `access_level()` answers `None` for everyone, admins included. Only
   `chat._prepare` adds it to the searched ids, after checking the conversation's owner. Deleting a

@@ -19,6 +19,13 @@ os.environ.update(
         "RETRIEVAL_MAX_DISTANCE": "0.75",
         "EMBED_BATCH_SIZE": "4",
         "LOG_LEVEL": "WARNING",
+        # The developer's .env must not leak into the suite (it may enable the local Keycloak).
+        "OIDC_ISSUER": "",
+        "OIDC_CLIENT_ID": "",
+        "OIDC_CLIENT_SECRET": "",
+        "OIDC_ADMIN_GROUPS": "",
+        "OIDC_ALLOWED_DOMAINS": "",
+        "CONNECTORS_ENABLED": "true",
     }
 )
 

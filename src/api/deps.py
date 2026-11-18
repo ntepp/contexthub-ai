@@ -24,6 +24,7 @@ from src.db.models import (
     ApiKey,
     Collection,
     CollectionGrant,
+    CollectionGroupGrant,
     User,
     utcnow,
 )
@@ -118,6 +119,24 @@ def require_admin(user: User = Depends(current_user)) -> User:
 _LEVEL_RANK = {None: 0, ACCESS_VIEWER: 1, ACCESS_EDITOR: 2, "admin": 3}
 
 
+def _best(*levels: str | None) -> str | None:
+    return max(levels, key=lambda level: _LEVEL_RANK[level])
+
+
+def group_levels(db: Session, user: User, collection_id: uuid.UUID | None = None) -> dict[uuid.UUID, str]:
+    """Access the user's SSO groups give, per collection (best level when several match)."""
+    groups = [g for g in (user.oidc_groups or []) if isinstance(g, str)]
+    if not groups:
+        return {}
+    stmt = select(CollectionGroupGrant).where(CollectionGroupGrant.group_name.in_(groups))
+    if collection_id is not None:
+        stmt = stmt.where(CollectionGroupGrant.collection_id == collection_id)
+    levels: dict[uuid.UUID, str] = {}
+    for grant in db.execute(stmt).scalars():
+        levels[grant.collection_id] = _best(levels.get(grant.collection_id), grant.level)
+    return levels
+
+
 def access_level(db: Session, user: User, collection: Collection) -> str | None:
     # Session collections (pages attached to a conversation) are private to that
     # conversation, administrators included: they are reached through it only.
@@ -130,9 +149,8 @@ def access_level(db: Session, user: User, collection: Collection) -> str | None:
             CollectionGrant.collection_id == collection.id, CollectionGrant.user_id == user.id
         )
     ).scalar_one_or_none()
-    if grant:
-        return grant
-    return ACCESS_VIEWER if collection.is_open else None
+    from_groups = group_levels(db, user, collection.id).get(collection.id)
+    return _best(grant, from_groups, ACCESS_VIEWER if collection.is_open else None)
 
 
 def accessible_collections(db: Session, user: User) -> list[tuple[Collection, str]]:
@@ -141,10 +159,9 @@ def accessible_collections(db: Session, user: User) -> list[tuple[Collection, st
             select(Collection).where(Collection.conversation_id.is_(None)).order_by(Collection.name)
         ).scalars()
         return [(c, "admin") for c in rows]
-    grants = {
-        g.collection_id: g.level
-        for g in db.execute(select(CollectionGrant).where(CollectionGrant.user_id == user.id)).scalars()
-    }
+    grants = group_levels(db, user)
+    for g in db.execute(select(CollectionGrant).where(CollectionGrant.user_id == user.id)).scalars():
+        grants[g.collection_id] = _best(grants.get(g.collection_id), g.level)
     rows = db.execute(
         select(Collection)
         .where(
