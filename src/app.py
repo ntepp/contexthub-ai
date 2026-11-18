@@ -69,6 +69,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url="/docs" if settings.environment != "production" else None,
         redoc_url=None,
+        # The schema lists every route and field: not served in production either.
+        openapi_url="/openapi.json" if settings.environment != "production" else None,
     )
 
     app.add_middleware(

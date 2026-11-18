@@ -94,13 +94,25 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
     if not settings.local_login_enabled:
         raise HTTPException(status_code=403, detail="La connexion par mot de passe est désactivée (SSO uniquement).")
     email = normalise_email(body.email)
-    key = f"rl:login:{client_ip(request)}:{email}"
-    if not limiter.hit(key, settings.login_max_attempts, settings.login_window_seconds):
+    ip = client_ip(request)
+    key = f"rl:login:{ip}:{email}"
+    window = settings.login_window_seconds
+    # Three counters: one address on one account (guessing), one address on any account
+    # (password spraying), one account from any address (distributed guessing).
+    allowed = [
+        limiter.hit(key, settings.login_max_attempts, window),
+        limiter.hit(f"rl:login-ip:{ip}", settings.login_ip_max_attempts, window),
+        limiter.hit(f"rl:login-account:{email}", settings.login_account_max_attempts, window),
+    ]
+    if not all(allowed):
         audit.record("auth.login", actor_of(request, None), outcome="denied", details={"email": email, "reason": "rate_limited"})
         raise HTTPException(status_code=429, detail="Trop de tentatives. Réessayez dans quelques minutes.")
 
     user = find_by_email(db, email)
-    if user is None or not verify_password(body.password, user.password_hash) or not user.is_active:
+    # Always verify, even when no account matches: skipping the bcrypt work would let the
+    # response time tell which e-mail addresses exist.
+    password_ok = verify_password(body.password, user.password_hash if user else None)
+    if user is None or not password_ok or not user.is_active:
         audit.record(
             "auth.login",
             actor_of(request, user),
@@ -122,7 +134,11 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)) 
     response.delete_cookie(SESSION_COOKIE, path="/")
     payload = decode_session_token(request.cookies.get(SESSION_COOKIE, ""))
     user = db.get(User, uuid.UUID(payload["sub"])) if payload else None
-    if user is not None:
+    if user is not None and user.session_version == payload.get("sv"):
+        # Sessions are stateless tokens: deleting the cookie is not enough, a copy of it
+        # would stay valid until it expires. Signing out revokes the user's sessions.
+        user.session_version += 1
+        db.commit()
         audit.record("auth.logout", actor_of(request, user))
     return {"ok": True}
 

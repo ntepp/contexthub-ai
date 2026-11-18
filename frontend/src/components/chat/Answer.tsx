@@ -78,12 +78,18 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
                     </button>
                   )
                 }
+                // The answer is model output over documents anyone may have written: only
+                // plain web links become clickable.
+                if (!href || !/^https?:\/\//i.test(href)) return <>{children}</>
                 return (
-                  <a href={href} target="_blank" rel="noreferrer" className="text-ledger underline">
+                  <a href={href} target="_blank" rel="noreferrer noopener" className="text-ledger underline">
                     {children}
                   </a>
                 )
               },
+              // Never load an image named by the answer: its address could carry data out
+              // (prompt injection through a document). The alternative text is shown instead.
+              img: ({ alt }) => <>{alt}</>,
               table: ({ children }) => (
                 <div className="my-3 overflow-x-auto">
                   <table className="w-full border-collapse font-sans text-sm">{children}</table>

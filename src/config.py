@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     cookie_secure: bool | None = None  # defaults to True in production
     login_max_attempts: int = 10
     login_window_seconds: int = 15 * 60
+    # Same window: failed or not, sign-in attempts from one address on any account
+    # (password spraying), and on one account from any address.
+    login_ip_max_attempts: int = 50
+    login_account_max_attempts: int = 30
+    # When set, GET /metrics requires "Authorization: Bearer <token>" (it is never proxied by nginx).
+    metrics_token: str | None = None
     ask_rate_limit_per_minute: int = 30
     password_min_length: int = 12
 

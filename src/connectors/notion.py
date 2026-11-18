@@ -104,7 +104,8 @@ class NotionConnector:
         return RemotePage(
             external_id=str(page.get("id", "")),
             title=page_title(page),
-            url=page.get("url") or "https://www.notion.so/",
+            # Shown as a link in the interface: never anything but an https address.
+            url=url if (url := str(page.get("url") or "")).startswith("https://") else "https://www.notion.so/",
             location=location,
             updated_at=page.get("last_edited_time"),
         )

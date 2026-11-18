@@ -8,9 +8,10 @@ deleted with it.
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,7 +54,9 @@ class ConnectionUpdate(BaseModel):
 class AttachRequest(BaseModel):
     connection_id: uuid.UUID
     # Page links pasted by the user, or page ids returned by the search.
-    references: list[str] = Field(min_length=1, max_length=_MAX_REFERENCES)
+    references: list[Annotated[str, StringConstraints(max_length=2000)]] = Field(
+        min_length=1, max_length=_MAX_REFERENCES
+    )
     conversation_id: uuid.UUID | None = None
 
 
