@@ -81,7 +81,7 @@ def serialize_document(doc: Document) -> dict:
     }
 
 
-def _dispatch(db: Session, doc: Document) -> None:
+def dispatch_ingestion(db: Session, doc: Document) -> None:
     from src.workers.tasks import ingest_document
 
     try:
@@ -261,7 +261,7 @@ def upload_document(
         collection_id=collection.id,
         details={"filename": filename, "size_bytes": doc.size_bytes, "sha256": doc.sha256},
     )
-    _dispatch(db, doc)
+    dispatch_ingestion(db, doc)
     return serialize_document(doc)
 
 
@@ -291,7 +291,7 @@ def import_url(
         collection_id=collection.id,
         details={"url": url},
     )
-    _dispatch(db, doc)
+    dispatch_ingestion(db, doc)
     return serialize_document(doc)
 
 
@@ -371,5 +371,5 @@ def reindex_document(
         resource_id=doc.id,
         collection_id=doc.collection_id,
     )
-    _dispatch(db, doc)
+    dispatch_ingestion(db, doc)
     return serialize_document(doc)

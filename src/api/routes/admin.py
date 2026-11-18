@@ -19,6 +19,7 @@ from src.audit import service as audit
 from src.auth.security import generate_password, hash_password, validate_password_strength
 from src.auth.users import create_local_user, find_by_email
 from src.config import get_settings
+from src.connectors.session_sources import drop_for_conversations
 from src.db.models import (
     ACCESS_EDITOR,
     ACCESS_VIEWER,
@@ -144,7 +145,9 @@ def delete_user(user_id: uuid.UUID, request: Request, admin: User = Depends(requ
         raise HTTPException(status_code=409, detail="Vous ne pouvez pas supprimer votre propre compte.")
     if user.role == ROLE_ADMIN and _admins_left(db, user.id) == 0:
         raise HTTPException(status_code=409, detail="Impossible : ce compte est le dernier administrateur actif.")
-    conversations = db.execute(select(func.count()).where(Conversation.user_id == user.id)).scalar_one()
+    conversation_ids = list(db.execute(select(Conversation.id).where(Conversation.user_id == user.id)).scalars())
+    conversations = len(conversation_ids)
+    drop_for_conversations(db, conversation_ids)
     db.delete(user)
     redacted = audit.redact_actor(db, user_id)
     db.commit()
@@ -165,7 +168,8 @@ def delete_user(user_id: uuid.UUID, request: Request, admin: User = Depends(requ
 
 def _collection(db: Session, collection_id: uuid.UUID) -> Collection:
     collection = db.get(Collection, collection_id)
-    if collection is None:
+    # Pages attached to a conversation are never shared: no grants on a session collection.
+    if collection is None or collection.conversation_id is not None:
         raise HTTPException(status_code=404, detail="Collection introuvable.")
     return collection
 
@@ -327,7 +331,9 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
     settings = get_settings()
     counts = {
         "users": db.execute(select(func.count()).select_from(User)).scalar_one(),
-        "collections": db.execute(select(func.count()).select_from(Collection)).scalar_one(),
+        "collections": db.execute(
+            select(func.count()).select_from(Collection).where(Collection.conversation_id.is_(None))
+        ).scalar_one(),
         "documents": db.execute(select(func.count()).select_from(Document)).scalar_one(),
         "messages": db.execute(select(func.count()).select_from(Message)).scalar_one(),
     }

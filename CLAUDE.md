@@ -22,7 +22,8 @@ python -m eval.run_eval --collection mifid [--ingest DIR]   # quality benchmark 
 
 ruff check src eval tests
 pytest                                     # SQLite + fakes, no external service
-TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest   # + real pgvector tests
+TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/contexthub_test pytest   # + real pgvector tests
+python -m tests.e2e.mock_confluence        # stand-in Confluence for demos and the connector e2e test (token "e2e-token")
 E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=... E2E_PASSWORD=... pytest -m e2e   # UI scenario (Playwright + Chrome, running stack)
 cd frontend && npm run build               # tsc strict + vite
 
@@ -36,12 +37,13 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/config.py` | `get_settings()` — every env var, defaults, production safety guards. Never call `os.getenv` elsewhere. |
 | `src/app.py` | `create_app()`: middleware (request id, metrics, security headers), generic error handlers, routers |
 | `src/api/deps.py` | Auth (session cookie or `Bearer chk_` API key), CSRF header check, `load_collection(db, user, id, minimum)` access control |
-| `src/api/routes/` | `auth`, `collections` (+ documents), `chat` (+ conversations, models), `admin`, `health` |
+| `src/api/routes/` | `auth`, `collections` (+ documents), `chat` (+ conversations, models), `connectors` (admin connections, `/chat/sources`), `admin`, `health` |
 | `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), rate limiter (Redis, in-memory fallback) |
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
-| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`) |
+| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`) |
 | `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |
@@ -64,6 +66,12 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
 - Every collection access goes through `load_collection()` / `accessible_collections()`; inaccessible
   collections answer 404. Retrieval filters by collection ids in SQL.
+- Connector pages live in a **session collection** (`Collection.conversation_id` set): never listed,
+  granted or opened directly — `access_level()` answers `None` for everyone, admins included. Only
+  `chat._prepare` adds it to the searched ids, after checking the conversation's owner. Deleting a
+  conversation (route, user erasure, retention) must call `drop_for_conversations()` first.
+- Connector secrets are write-only: encrypted at rest, never returned, never audited. Connectors
+  never follow redirects and never call a user-supplied URL (only the page id is extracted).
 - Audit hash covers every column except `actor_email`, `ip`, `user_agent` (redactable for GDPR).
 - LangSmith tracing is forced off unless `LANGCHAIN_TRACING_V2=true` (it ships document excerpts out).
 - Cookie-authenticated non-GET requests need the `X-Requested-With` header (frontend sets it).
@@ -73,4 +81,9 @@ docker compose up -d --build               # production stack (docker-compose.ya
 `tests/conftest.py` sets env vars before importing `src`, uses SQLite in-memory, `InMemoryChunkStore`,
 `HashEmbeddings` and `ScriptedChatModel` (`tests/fakes.py`), Celery eager mode. `tests/test_pg.py`
 (marker `pg`) migrates a real database from scratch. `tests/e2e/` (marker `e2e`) drives the running UI with
-Playwright: agentic retrieval, definition chunking and refusal on the HR corpus.
+Playwright: agentic retrieval, definition chunking and refusal on the HR corpus; connectors against
+`tests/e2e/mock_confluence.py`. Connector unit tests replace the remote systems with
+`registry.set_connector_factory_override()` or an `httpx.MockTransport`.
+
+On Windows use `127.0.0.1`, not `localhost`, for PostgreSQL/Redis: `localhost` can resolve to `::1`
+first and every connection then stalls for a minute.

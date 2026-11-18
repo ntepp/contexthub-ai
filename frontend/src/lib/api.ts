@@ -97,6 +97,51 @@ export interface Source {
   snippet: string
   distance: number
   cited: boolean
+  /** Page fetched through a connector: where it lives in its own system. */
+  url?: string | null
+  source_kind?: ConnectorKind | null
+}
+
+export type ConnectorKind = 'confluence' | 'notion'
+
+/** A configured link to an external document system. Members see id, kind and name only. */
+export interface Connection {
+  id: string
+  kind: ConnectorKind
+  kind_label: string
+  name: string
+  base_url?: string | null
+  account?: string | null
+  is_enabled?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface RemotePage {
+  external_id: string
+  title: string
+  url: string
+  location: string | null
+  updated_at: string | null
+}
+
+/** A page attached to one conversation. */
+export interface AttachedSource {
+  id: string
+  title: string
+  url: string | null
+  kind: ConnectorKind | null
+  kind_label: string
+  connection_id: string | null
+  status: 'queued' | 'processing' | 'ready' | 'failed'
+  error_message: string | null
+  warnings: string[]
+}
+
+export interface AttachResult {
+  conversation_id: string
+  sources: AttachedSource[]
+  errors: { reference: string; message: string }[]
 }
 
 export interface AnswerResult {
@@ -217,12 +262,39 @@ export const api = {
   conversations: () => http.get<ConversationSummary[]>('/conversations').then((r) => r.data),
   conversation: (id: string) =>
     http
-      .get<{ id: string; title: string; collection_ids: string[]; messages: ChatMessage[] }>(`/conversations/${id}`)
+      .get<{
+        id: string
+        title: string
+        collection_ids: string[]
+        messages: ChatMessage[]
+        sources: AttachedSource[]
+      }>(`/conversations/${id}`)
       .then((r) => r.data),
   renameConversation: (id: string, title: string) => http.patch(`/conversations/${id}`, { title }),
   deleteConversation: (id: string) => http.delete(`/conversations/${id}`),
   feedback: (messageId: string, value: -1 | 0 | 1, comment?: string) =>
     http.post(`/messages/${messageId}/feedback`, { value, comment }),
+
+  // connectors
+  connections: () => http.get<Connection[]>('/connections').then((r) => r.data),
+  searchConnection: (id: string, params: { q?: string; space?: string; label?: string }) =>
+    http.get<{ pages: RemotePage[] }>(`/connections/${id}/search`, { params }).then((r) => r.data.pages),
+  conversationSources: (conversationId: string) =>
+    http.get<AttachedSource[]>(`/conversations/${conversationId}/sources`).then((r) => r.data),
+  attachSources: (body: { connection_id: string; references: string[]; conversation_id?: string }) =>
+    http.post<AttachResult>('/chat/sources', body).then((r) => r.data),
+  detachSource: (conversationId: string, documentId: string) =>
+    http.delete(`/conversations/${conversationId}/sources/${documentId}`),
+  adminConnections: () => http.get<Connection[]>('/admin/connections').then((r) => r.data),
+  createConnection: (body: { kind: ConnectorKind; name: string; base_url?: string; account?: string; secret: string }) =>
+    http.post<Connection>('/admin/connections', body).then((r) => r.data),
+  updateConnection: (
+    id: string,
+    body: { name?: string; base_url?: string; account?: string; secret?: string; is_enabled?: boolean },
+  ) => http.patch<Connection>(`/admin/connections/${id}`, body).then((r) => r.data),
+  deleteConnection: (id: string) => http.delete(`/admin/connections/${id}`),
+  testConnection: (id: string) =>
+    http.post<{ ok: boolean; message: string }>(`/admin/connections/${id}/test`).then((r) => r.data),
 
   // admin
   users: () => http.get<User[]>('/admin/users').then((r) => r.data),
@@ -280,7 +352,13 @@ export type StreamEvent =
   | { type: 'done' }
 
 export async function streamAsk(
-  body: { question: string; collection_ids?: string[]; conversation_id?: string; model?: string },
+  body: {
+    question: string
+    collection_ids?: string[]
+    conversation_id?: string
+    model?: string
+    attached_only?: boolean
+  },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

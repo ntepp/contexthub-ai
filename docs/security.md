@@ -27,6 +27,7 @@ joignables que sur le réseau Docker interne.
 | `EMBEDDING_PROVIDER=openai` | Le texte intégral des documents est envoyé au fournisseur lors de l'indexation. Déconseillé. |
 | `LANGCHAIN_TRACING_V2=true` | Prompts et extraits envoyés à LangSmith. **Désactivé par défaut**, forcé à `false` au démarrage sinon. |
 | `ALLOW_URL_INGESTION=true` | Le serveur télécharge les pages web demandées par les éditeurs. Désactivé par défaut. |
+| Une connexion Confluence ou Notion est configurée (`CONNECTORS_ENABLED=true`) | Le serveur appelle l'API de l'outil pour chercher et lire les pages choisies par les utilisateurs. Confluence Data Center reste dans votre réseau ; Confluence Cloud et Notion sont des services externes que vous utilisez déjà. Rien n'y est écrit. |
 
 La page *Administration › Système* affiche le mode effectif (« 100 % local » ou la liste des
 fournisseurs cloud autorisés).
@@ -92,6 +93,26 @@ exportez régulièrement le journal vers un stockage WORM ou un SIEM.
   vérifiée (adresses privées, de bouclage, lien-local, réservées et métadonnées cloud refusées),
   chaque redirection revérifiée, taille plafonnée. Risque résiduel : rebinding DNS entre la
   vérification et la connexion.
+
+### Connecteurs (Confluence, Notion)
+
+- Les connexions sont créées par un administrateur. Le jeton est chiffré en base (Fernet, clé
+  dérivée de `SECRET_KEY`) et n'est jamais renvoyé par l'API ni écrit dans le journal d'audit.
+  Changer `SECRET_KEY` rend les jetons illisibles : il faut alors les saisir à nouveau.
+- **Les utilisateurs voient tout ce que le compte de la connexion peut lire.** Utilisez un compte
+  de service limité aux espaces que tous les utilisateurs de ContextHub peuvent consulter.
+- Aucune synchronisation : seules les pages choisies sont lues. Elles sont indexées dans une
+  collection privée à la conversation, invisible des autres utilisateurs et des administrateurs,
+  et supprimées avec la conversation (fichier, vecteurs, métadonnées), y compris par la
+  rétention et l'effacement RGPD d'un compte.
+- L'adresse de Confluence est fixée par l'administrateur (elle peut être interne). Les liens
+  collés par les utilisateurs ne sont jamais appelés tels quels : seul l'identifiant de page en
+  est extrait, et un lien vers un autre hôte est refusé. Les redirections ne sont pas suivies, de
+  sorte que le jeton n'est jamais envoyé ailleurs.
+- Recherches, pages jointes et retirées sont journalisées (`connection.search`,
+  `source.attach`, `source.detach`), avec l'adresse et l'empreinte SHA-256 de chaque page.
+- Limites : `CONNECTOR_MAX_PAGES_PER_CONVERSATION` (20), `CONNECTOR_MAX_PAGE_MB` (5),
+  même limitation de débit que les questions.
 
 ## 7. Protection des données (RGPD)
 

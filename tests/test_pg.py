@@ -1,6 +1,6 @@
 """Integration tests against a real PostgreSQL + pgvector (Alembic schema, hybrid SQL).
 
-    TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/contexthub_test pytest -m pg
+    TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/contexthub_test pytest -m pg
 
 The database is wiped and migrated from scratch. Skipped when the variable is unset.
 """
@@ -47,7 +47,8 @@ def pg(migrated):
         conn.execute(
             text(
                 "TRUNCATE hub_audit_events, hub_messages, hub_conversations, hub_chunks, hub_documents, "
-                "hub_collection_grants, hub_api_keys, hub_collections, hub_users RESTART IDENTITY CASCADE"
+                "hub_collection_grants, hub_api_keys, hub_collections, hub_connections, hub_users "
+                "RESTART IDENTITY CASCADE"
             )
         )
     store_module.set_store_override(None)  # real PgChunkStore
@@ -129,3 +130,36 @@ def test_hybrid_search_reaches_lexical_matches_beyond_vector_top_n(pg):
 
     other = admin.post("/collections", json={"name": "Autre"}).json()
     assert store.search(query, vector, [uuid.UUID(other["id"])], candidates=5, hybrid=True) == []
+
+
+def test_attached_pages_are_searched_then_cascade_with_the_conversation(pg):
+    """Connector pages on real PostgreSQL: hybrid SQL search restricted to the conversation's
+    session collection, then conversation -> collection -> documents -> chunks cascade."""
+    from src.connectors import registry
+    from tests.test_connectors import BASE, QUESTION, FakeConnector
+
+    admin, _ = _admin_client(pg)
+    fake = FakeConnector()
+    registry.set_connector_factory_override(lambda connection: fake)
+    try:
+        connection = admin.post(
+            "/admin/connections", json={"kind": "confluence", "name": "Wiki", "base_url": BASE, "secret": "tok"}
+        ).json()
+        attached = admin.post("/chat/sources", json={"connection_id": connection["id"], "references": ["100"]}).json()
+        assert attached["sources"][0]["status"] == "ready", attached
+        conversation_id = attached["conversation_id"]
+
+        body = admin.post("/chat/ask", json={"question": QUESTION, "conversation_id": conversation_id}).json()
+        assert body["refused"] is False, body
+        assert body["sources"][0]["url"] == f"{BASE}/spaces/RH/pages/100"
+
+        # Without the conversation, the page is out of reach: nothing else to search.
+        assert admin.post("/chat/ask", json={"question": QUESTION}).status_code == 400
+
+        assert admin.delete(f"/conversations/{conversation_id}").status_code == 200
+        with pg.connect() as conn:
+            for table in ("hub_chunks", "hub_documents", "hub_collections"):
+                assert conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one() == 0, table
+        assert admin.get("/admin/audit/verify").json()["valid"] is True
+    finally:
+        registry.set_connector_factory_override(None)

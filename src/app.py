@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.api.routes import admin, auth, chat, collections, health
+from src.api.routes import admin, auth, chat, collections, connectors, health
 from src.auth.users import ensure_bootstrap_admin
 from src.config import get_settings
 from src.db.session import SessionLocal
@@ -117,7 +117,7 @@ def create_app() -> FastAPI:
             status_code=500,
         )
 
-    for module in (health, auth, collections, chat, admin):
+    for module in (health, auth, collections, chat, connectors, admin):
         app.include_router(module.router)
     return app
 

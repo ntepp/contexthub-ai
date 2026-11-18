@@ -119,6 +119,10 @@ _LEVEL_RANK = {None: 0, ACCESS_VIEWER: 1, ACCESS_EDITOR: 2, "admin": 3}
 
 
 def access_level(db: Session, user: User, collection: Collection) -> str | None:
+    # Session collections (pages attached to a conversation) are private to that
+    # conversation, administrators included: they are reached through it only.
+    if collection.conversation_id is not None:
+        return None
     if user.is_admin:
         return "admin"
     grant = db.execute(
@@ -133,14 +137,20 @@ def access_level(db: Session, user: User, collection: Collection) -> str | None:
 
 def accessible_collections(db: Session, user: User) -> list[tuple[Collection, str]]:
     if user.is_admin:
-        return [(c, "admin") for c in db.execute(select(Collection).order_by(Collection.name)).scalars()]
+        rows = db.execute(
+            select(Collection).where(Collection.conversation_id.is_(None)).order_by(Collection.name)
+        ).scalars()
+        return [(c, "admin") for c in rows]
     grants = {
         g.collection_id: g.level
         for g in db.execute(select(CollectionGrant).where(CollectionGrant.user_id == user.id)).scalars()
     }
     rows = db.execute(
         select(Collection)
-        .where(or_(Collection.is_open.is_(True), Collection.id.in_(list(grants) or [uuid.uuid4()])))
+        .where(
+            Collection.conversation_id.is_(None),
+            or_(Collection.is_open.is_(True), Collection.id.in_(list(grants) or [uuid.uuid4()])),
+        )
         .order_by(Collection.name)
     ).scalars()
     return [(c, grants.get(c.id, ACCESS_VIEWER)) for c in rows]
