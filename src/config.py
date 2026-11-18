@@ -11,6 +11,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +19,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 log = logging.getLogger("contexthub")
 
 _INSECURE_SECRET = "dev-insecure-secret-change-me"
+
+# LLM gateway products ContextHub has adapters for (consumption, budgets).
+SUPPORTED_GATEWAY_KINDS = ("litellm",)
 
 DEFAULT_NO_ANSWER = "L'information n'est pas disponible dans la base de connaissances actuelle."
 
@@ -43,6 +47,12 @@ class Settings(BaseSettings):
     cookie_secure: bool | None = None  # defaults to True in production
     login_max_attempts: int = 10
     login_window_seconds: int = 15 * 60
+    # Same window: failed or not, sign-in attempts from one address on any account
+    # (password spraying), and on one account from any address.
+    login_ip_max_attempts: int = 50
+    login_account_max_attempts: int = 30
+    # When set, GET /metrics requires "Authorization: Bearer <token>" (it is never proxied by nginx).
+    metrics_token: str | None = None
     ask_rate_limit_per_minute: int = 30
     password_min_length: int = 12
 
@@ -63,14 +73,15 @@ class Settings(BaseSettings):
     local_login_enabled: bool = True
 
     # ------------------------------------------------------------------ storage
-    postgres_host: str = "localhost"
+    # 127.0.0.1, not localhost: on Windows localhost may resolve to ::1 first and stall.
+    postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
     postgres_db: str = "contexthub"
     database_url: str | None = None
 
-    redis_host: str = "localhost"
+    redis_host: str = "127.0.0.1"
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
@@ -90,6 +101,13 @@ class Settings(BaseSettings):
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
 
+    # ------------------------------------------------------------------ connectors
+    # Pages picked by a user in Confluence / Notion are attached to one conversation.
+    connectors_enabled: bool = True
+    connector_timeout_seconds: int = 20
+    connector_max_page_mb: int = 5
+    connector_max_pages_per_conversation: int = 20
+
     # ------------------------------------------------------------------ embeddings
     embedding_provider: Literal["ollama", "openai", "openai_compatible"] = "ollama"
     embedding_model: str = "bge-m3"
@@ -104,7 +122,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_timeout_seconds: int = 120
 
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://127.0.0.1:11434"
     # "Thinking" models (qwen3, deepseek-r1…) are ~25x slower with reasoning on, for no
     # gain on short grounded answers. Off by default; ignored by non-thinking models.
     ollama_reasoning: bool = False
@@ -119,6 +137,28 @@ class Settings(BaseSettings):
     # Set to true when the OpenAI-compatible endpoint runs inside the client's network
     # (vLLM, LM Studio...) so the UI does not flag it as a cloud model.
     openai_compatible_is_local: bool = False
+
+    # ------------------------------------------------------------------ LLM gateway (ADR-001)
+    # When LLM_GATEWAY_URL is set, every chat call (condense, plan, generate) goes through
+    # this OpenAI-compatible gateway, whatever the selected model; provider keys are not
+    # needed. Costs, budgets and rate limits belong to the gateway: ContextHub stores none.
+    llm_gateway_url: str | None = None  # proxy root, e.g. http://litellm:4000
+    llm_gateway_kind: str = "litellm"  # one of SUPPORTED_GATEWAY_KINDS, checked at startup
+    # Application key used for chat calls and for listing the served models.
+    llm_gateway_api_key: str | None = None
+    # Gateway administrator key, used only to read consumption (LiteLLM reserves the spend
+    # endpoints to admin keys). Optional, no fallback on LLM_GATEWAY_API_KEY (least
+    # privilege): without it the consumption pages say they are not configured.
+    llm_gateway_admin_key: str | None = None
+    llm_gateway_label: str = "Passerelle LLM"
+    # True when the gateway and the models it serves run inside the client's network.
+    llm_gateway_is_local: bool = False
+    llm_gateway_timeout_seconds: int = 10  # admin / catalogue calls; chat uses LLM_TIMEOUT_SECONDS
+    llm_gateway_models_ttl_seconds: int = 60
+    # Address of the gateway's own console as the administrators' browser reaches it, linked
+    # from Administration › Modèles. Empty: derived (LiteLLM: <LLM_GATEWAY_URL>/ui) unless the
+    # gateway host is a bare service name (e.g. "litellm" in Docker), unreachable from a browser.
+    llm_gateway_console_url: str | None = None
 
     # ------------------------------------------------------------------ retrieval
     retrieval_max_distance: float = 0.75
@@ -149,6 +189,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
+        self.llm_gateway_kind = (self.llm_gateway_kind or "").strip().lower()
+        if self.llm_gateway_kind not in SUPPORTED_GATEWAY_KINDS:
+            raise ValueError(
+                f"LLM_GATEWAY_KIND={self.llm_gateway_kind!r} is not supported "
+                f"(accepted values: {', '.join(SUPPORTED_GATEWAY_KINDS)})"
+            )
+        for name in ("llm_gateway_url", "llm_gateway_console_url"):
+            value = getattr(self, name)
+            if not value:
+                continue
+            parsed = urlparse(value.strip())
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError(f"{name.upper()} must be an http(s) URL")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError(f"{name.upper()} must not contain credentials or parameters")
         if self.environment == "production":
             problems = []
             if self.secret_key == _INSECURE_SECRET or len(self.secret_key) < 32:
@@ -159,6 +214,8 @@ class Settings(BaseSettings):
                 problems.append("REDIS_PASSWORD must not be a default value")
             if self.admin_password == "change-me":
                 problems.append("ADMIN_PASSWORD must not be a default value")
+            if self.llm_gateway_url and not self.llm_gateway_api_key:
+                problems.append("LLM_GATEWAY_API_KEY must be set when LLM_GATEWAY_URL is set")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
@@ -186,6 +243,28 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
+    def gateway_enabled(self) -> bool:
+        return bool(self.llm_gateway_url and self.llm_gateway_url.strip())
+
+    @property
+    def gateway_root(self) -> str:
+        """Gateway root URL, without trailing slash nor ``/v1`` (accepted for convenience)."""
+        root = (self.llm_gateway_url or "").strip().rstrip("/")
+        return root[:-3] if root.endswith("/v1") else root
+
+    @property
+    def gateway_console_url(self) -> str | None:
+        """Link to the gateway console for administrators, or None when not safely known."""
+        if not self.gateway_enabled:
+            return None
+        if self.llm_gateway_console_url and self.llm_gateway_console_url.strip():
+            return self.llm_gateway_console_url.strip()
+        host = (urlparse(self.gateway_root).hostname or "").lower()
+        if self.llm_gateway_kind != "litellm" or not _browser_reachable(host):
+            return None
+        return f"{self.gateway_root}/ui"
+
+    @property
     def oidc_enabled(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_client_id)
 
@@ -201,6 +280,21 @@ class Settings(BaseSettings):
     @staticmethod
     def split_csv(value: str) -> list[str]:
         return [v.strip() for v in value.split(",") if v.strip()]
+
+
+# Hosts that only resolve inside a container network or a cluster, or are no address at all.
+_UNREACHABLE_HOSTS = ("0.0.0.0", "::", "host.docker.internal", "gateway.docker.internal")
+_UNREACHABLE_SUFFIXES = (".svc", ".svc.cluster.local", ".cluster.local")
+
+
+def _browser_reachable(host: str) -> bool:
+    """Whether a browser on the administrator's machine can plausibly open ``host``: not a
+    bare service name (``litellm`` in Docker Compose), not a cluster-internal name."""
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if host in _UNREACHABLE_HOSTS or host.endswith(_UNREACHABLE_SUFFIXES):
+        return False
+    return "." in host or ":" in host  # FQDN, IPv4 or IPv6 literal
 
 
 @lru_cache

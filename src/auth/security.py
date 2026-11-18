@@ -30,13 +30,26 @@ def _prepare(password: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(_prepare(password), bcrypt.gensalt(rounds=12)).decode("ascii")
+    return bcrypt.hashpw(_prepare(password), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode("ascii")
+
+
+_BCRYPT_ROUNDS = 12
+_dummy_hash: bytes | None = None
+
+
+def _dummy() -> bytes:
+    """A hash nobody's password matches, at the same cost as real ones."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = bcrypt.hashpw(secrets.token_bytes(24), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS))
+    return _dummy_hash
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
-        # Constant-ish work even for SSO-only accounts, to avoid user enumeration by timing.
-        bcrypt.checkpw(b"x", bcrypt.hashpw(b"y", bcrypt.gensalt(rounds=4)))
+        # Unknown or SSO-only account: do the same work as a real check, so that the
+        # response time does not tell which e-mail addresses have an account.
+        bcrypt.checkpw(_prepare(password), _dummy())
         return False
     try:
         return bcrypt.checkpw(_prepare(password), password_hash.encode("ascii"))

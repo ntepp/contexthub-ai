@@ -3,13 +3,19 @@ import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/Notice'
 import { Access } from './Access'
 import { Audit } from './Audit'
+import { Connections } from './Connections'
+import { Models } from './Models'
 import { System } from './System'
+import { Usage } from './Usage'
 import { Users } from './Users'
 
 const TABS = [
   ['utilisateurs', 'Utilisateurs'],
   ['acces', 'Accès'],
+  ['connecteurs', 'Connecteurs'],
   ['journal', "Journal d'audit"],
+  ['modeles', 'Modèles'],
+  ['consommation', 'Consommation'],
   ['systeme', 'Système'],
 ] as const
 
@@ -37,7 +43,10 @@ export function Admin() {
         <Route index element={<Navigate to="utilisateurs" replace />} />
         <Route path="utilisateurs" element={<Users />} />
         <Route path="acces" element={<Access />} />
+        <Route path="connecteurs" element={<Connections />} />
         <Route path="journal" element={<Audit />} />
+        <Route path="modeles" element={<Models />} />
+        <Route path="consommation" element={<Usage />} />
         <Route path="systeme" element={<System />} />
       </Routes>
     </div>

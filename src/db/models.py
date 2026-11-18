@@ -58,6 +58,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auth_provider: Mapped[str] = mapped_column(String(20), default="local")
     oidc_subject: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # Groups carried by the last SSO login (claim OIDC_GROUPS_CLAIM); they open the
+    # collections granted to those groups. Empty for password accounts.
+    oidc_groups: Mapped[list | None] = mapped_column(JSONType)
     # Bumped to revoke every outstanding session of the user.
     session_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -101,6 +104,12 @@ class Collection(Base):
     # When true, every active member can query the collection (viewer access).
     is_open: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hub_users.id", ondelete="SET NULL"))
+    # Set on the hidden "session collection" that holds the pages a user attached to one
+    # conversation through a connector. Such a collection is reachable only through its
+    # conversation: it is never listed, granted or opened directly (see api/deps.py).
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("hub_conversations.id", ondelete="CASCADE"), unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -128,6 +137,21 @@ class CollectionGrant(Base):
     user: Mapped[User] = relationship(back_populates="grants")
 
 
+class CollectionGroupGrant(Base):
+    """Access given to every member of an SSO group, re-evaluated at each login."""
+
+    __tablename__ = "hub_collection_group_grants"
+    __table_args__ = (UniqueConstraint("collection_id", "group_name", name="uq_group_grant_collection_group"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hub_collections.id", ondelete="CASCADE"), index=True
+    )
+    group_name: Mapped[str] = mapped_column(String(255), index=True)
+    level: Mapped[str] = mapped_column(String(20), default=ACCESS_VIEWER)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 DOC_QUEUED = "queued"
 DOC_PROCESSING = "processing"
 DOC_READY = "ready"
@@ -150,6 +174,9 @@ class Document(Base):
     sha256: Mapped[str | None] = mapped_column(String(64))
     storage_path: Mapped[str | None] = mapped_column(String(1000))
     source_url: Mapped[str | None] = mapped_column(String(2000))
+    # Page fetched through a connector: which connection, and its id in the remote system.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hub_connections.id", ondelete="SET NULL"))
+    external_id: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default=DOC_QUEUED)
     error_message: Mapped[str | None] = mapped_column(Text)
     warnings: Mapped[list | None] = mapped_column(JSONType)
@@ -164,6 +191,37 @@ class Document(Base):
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     collection: Mapped[Collection] = relationship(back_populates="documents")
+
+
+# ---------------------------------------------------------------------------
+# Connectors
+# ---------------------------------------------------------------------------
+
+CONNECTOR_CONFLUENCE = "confluence"
+CONNECTOR_NOTION = "notion"
+CONNECTOR_KINDS = (CONNECTOR_CONFLUENCE, CONNECTOR_NOTION)
+
+
+class Connection(Base):
+    """A configured link to an external document system (admin-managed).
+
+    The secret (API token) is stored encrypted with a key derived from ``SECRET_KEY``
+    and is never returned by the API.
+    """
+
+    __tablename__ = "hub_connections"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    base_url: Mapped[str | None] = mapped_column(String(500))
+    # Account e-mail for Confluence Cloud (basic auth); empty = bearer token (Data Center PAT).
+    account: Mapped[str | None] = mapped_column(String(320))
+    secret_encrypted: Mapped[str] = mapped_column(Text)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hub_users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +266,26 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+# ---------------------------------------------------------------------------
+# Instance settings
+# ---------------------------------------------------------------------------
+
+
+class InstanceSetting(Base):
+    """Administrator choices stored by ContextHub (ADR-002), one JSON value per key.
+
+    Only what ContextHub decides lives here (e.g. the models offered in the chat): never a
+    cost, a budget or a secret, which belong to the LLM gateway.
+    """
+
+    __tablename__ = "hub_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONType)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("hub_users.id", ondelete="SET NULL"))
 
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,31 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, BookOpen, CloudUpload, Square } from 'lucide-react'
-import { api, errorMessage, streamAsk, type ChatMessage, type Model } from '@/lib/api'
+import { ArrowUp, BookOpen, CloudUpload, ExternalLink, Loader2, Paperclip, Square, TriangleAlert, X } from 'lucide-react'
+import {
+  api,
+  errorMessage,
+  isBudgetExceeded,
+  streamAsk,
+  type AttachedSource,
+  type ChatMessage,
+  type Connection,
+  type Model,
+  modelAvailability,
+} from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { Answer } from '@/components/chat/Answer'
+import { AttachDialog } from '@/components/chat/AttachDialog'
 import { SourcePanel } from '@/components/chat/SourcePanel'
 import { CONVERSATIONS_CHANGED } from '@/components/layout/Sidebar'
 
 const ALL = '__all__'
+const ATTACHED = '__attached__'
+
+function connectionNames(connections: Connection[]): string {
+  const kinds = [...new Set(connections.map((c) => c.kind_label))]
+  return kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} ou ${kinds[kinds.length - 1]}` : kinds[0] ?? ''
+}
 
 export function Chat() {
   const { conversationId } = useParams()
@@ -23,6 +40,9 @@ export function Chat() {
   const [models, setModels] = useState<Model[]>([])
   const [model, setModel] = useState<string>('')
   const [panel, setPanel] = useState<{ message: number; source: number } | null>(null)
+  const [connections, setConnections] = useState<Connection[]>([])
+  const [attached, setAttached] = useState<AttachedSource[]>([])
+  const [attaching, setAttaching] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -38,12 +58,18 @@ export function Chat() {
         setModel((current) => current || data.default)
       })
       .catch(() => {})
+    api
+      .connections()
+      .then(setConnections)
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
     setPanel(null)
     if (!conversationId) {
       setMessages([])
+      setAttached([])
+      setScope((current) => (current === ATTACHED ? ALL : current))
       inputRef.current?.focus()
       return
     }
@@ -52,6 +78,7 @@ export function Chat() {
       .conversation(conversationId)
       .then((c) => {
         setMessages(c.messages)
+        setAttached(c.sources ?? [])
         if (c.collection_ids.length === 1) setScope(c.collection_ids[0])
         else setScope(ALL)
       })
@@ -61,6 +88,33 @@ export function Chat() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages])
+
+  // Attached pages are indexed in the background: follow them until they are ready.
+  const indexing = attached.some((s) => s.status === 'queued' || s.status === 'processing')
+  useEffect(() => {
+    if (!conversationId || !indexing) return
+    const timer = window.setInterval(() => {
+      api
+        .conversationSources(conversationId)
+        .then(setAttached)
+        .catch(() => {})
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [conversationId, indexing])
+
+  const detach = async (source: AttachedSource) => {
+    if (!conversationId) return
+    try {
+      await api.detachSource(conversationId, source.id)
+      setAttached((list) => {
+        const next = list.filter((s) => s.id !== source.id)
+        if (next.length === 0) setScope((current) => (current === ATTACHED ? ALL : current))
+        return next
+      })
+    } catch {
+      /* the chip stays: the next refresh tells the truth */
+    }
+  }
 
   const updateLast = (patch: (m: ChatMessage) => ChatMessage) =>
     setMessages((list) => {
@@ -84,7 +138,8 @@ export function Chat() {
         {
           question,
           conversation_id: conversationId,
-          collection_ids: scope === ALL ? undefined : [scope],
+          collection_ids: scope === ALL || scope === ATTACHED ? undefined : [scope],
+          attached_only: scope === ATTACHED || undefined,
           model: model || undefined,
         },
         (event) => {
@@ -105,14 +160,20 @@ export function Chat() {
               latency_seconds: event.latency_seconds,
             }))
           } else if (event.type === 'error') {
-            updateLast(() => ({ role: 'assistant', content: event.message, error: true }))
+            // `code` is set when the LLM gateway refused the call (budget, rate limit, outage).
+            updateLast(() => ({ role: 'assistant', content: event.message, error: true, code: event.code }))
           }
         },
         abort.signal,
       )
     } catch (err) {
       if (!abort.signal.aborted) {
-        updateLast(() => ({ role: 'assistant', content: errorMessage(err), error: true }))
+        updateLast(() => ({
+          role: 'assistant',
+          content: errorMessage(err),
+          error: true,
+          code: isBudgetExceeded(err) ? 'budget_exceeded' : undefined,
+        }))
       } else {
         updateLast((m) => ({ ...m, pending: false, content: m.content || 'Réponse interrompue.' }))
       }
@@ -120,10 +181,9 @@ export function Chat() {
       setStreaming(false)
       abortRef.current = null
       // Navigate only once the answer is complete, so the page is never re-rendered mid-stream.
-      if (created) {
-        navigate(`/c/${created}`, { replace: true })
-        window.dispatchEvent(new Event(CONVERSATIONS_CHANGED))
-      }
+      if (created) navigate(`/c/${created}`, { replace: true })
+      // Also refreshes the title of a conversation opened by attaching pages.
+      window.dispatchEvent(new Event(CONVERSATIONS_CHANGED))
     }
   }, [input, streaming, conversationId, scope, model, navigate])
 
@@ -136,7 +196,8 @@ export function Chat() {
 
   const selectedModel = models.find((m) => m.id === model)
   const panelSources = panel ? messages[panel.message]?.sources ?? [] : []
-  const noCollections = collections.length === 0
+  const noCollections = collections.length === 0 && attached.length === 0
+  const canAttach = connections.length > 0
 
   return (
     <div className="flex h-full">
@@ -151,7 +212,10 @@ export function Chat() {
               onChange={(e) => setScope(e.target.value)}
               disabled={streaming}
             >
-              <option value={ALL}>Toutes mes collections</option>
+              <option value={ALL}>
+                {attached.length > 0 ? 'Mes collections et les pages jointes' : 'Toutes mes collections'}
+              </option>
+              {attached.length > 0 && <option value={ATTACHED}>Pages jointes uniquement</option>}
               {collections.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -168,18 +232,25 @@ export function Chat() {
                 onChange={(e) => setModel(e.target.value)}
                 disabled={streaming}
               >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id} disabled={!m.available}>
-                    {m.name} ({m.is_local ? 'local' : m.provider_label}){m.available ? '' : ', indisponible'}
-                  </option>
-                ))}
+                {models.map((m) => {
+                  // "unknown" (gateway unreachable) stays selectable: the answer will tell.
+                  const state = modelAvailability(m)
+                  return (
+                    <option key={m.id} value={m.id} disabled={state === 'unavailable'}>
+                      {m.name} ({m.is_local ? 'local' : m.provider_label})
+                      {state === 'unavailable' ? ', indisponible' : state === 'unknown' ? ', disponibilité non vérifiée' : ''}
+                    </option>
+                  )
+                })}
               </select>
             </label>
           )}
           {selectedModel && !selectedModel.is_local && (
             <span className="flex items-center gap-1.5 rounded-md bg-cloud-soft px-2 py-1 text-xs text-cloud">
               <CloudUpload size={14} />
-              Les extraits utiles de vos documents sont envoyés à {selectedModel.provider_label}.
+              {selectedModel.provider === 'gateway'
+                ? `Les extraits utiles de vos documents sont envoyés au modèle ${selectedModel.name} (${selectedModel.provider_label}).`
+                : `Les extraits utiles de vos documents sont envoyés à ${selectedModel.provider_label}.`}
             </span>
           )}
         </div>
@@ -193,9 +264,17 @@ export function Chat() {
                   Chaque réponse s'appuie uniquement sur les documents de vos collections et renvoie à la page exacte.
                   Si les documents ne permettent pas de répondre, ContextHub le dit.
                 </p>
+                {canAttach && (
+                  <p className="mt-3 max-w-xl text-slate">
+                    Vous pouvez aussi joindre à la conversation des pages de {connectionNames(connections)}, par lien
+                    ou par recherche.
+                  </p>
+                )}
                 {noCollections && (
                   <p className="mt-6 rounded-md border border-refusal/30 bg-refusal-soft px-4 py-3 text-sm text-refusal">
-                    Vous n'avez encore accès à aucune collection. Demandez un accès à votre administrateur.
+                    Vous n'avez encore accès à aucune collection.{' '}
+                    {canAttach ? 'Joignez une page pour commencer, ou demandez' : 'Demandez'} un accès à votre
+                    administrateur.
                   </p>
                 )}
               </div>
@@ -224,7 +303,59 @@ export function Chat() {
 
         <div className="border-t border-rule bg-surface px-6 py-4">
           <div className="mx-auto max-w-3xl">
+            {attached.length > 0 && (
+              <ul className="mb-2 flex flex-wrap gap-2" aria-label="Pages jointes à la conversation">
+                {attached.map((s) => (
+                  <li
+                    key={s.id}
+                    className={cn(
+                      'flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs',
+                      s.status === 'failed' ? 'border-danger/30 bg-danger-soft text-danger' : 'border-rule bg-wash text-ink',
+                    )}
+                    title={s.status === 'failed' ? s.error_message ?? 'Indexation impossible' : s.warnings.join(' ')}
+                  >
+                    {s.status === 'failed' ? (
+                      <TriangleAlert size={12} className="shrink-0" />
+                    ) : s.status !== 'ready' ? (
+                      <Loader2 size={12} className="shrink-0 animate-spin" aria-label="Lecture en cours" />
+                    ) : null}
+                    <span className="shrink-0 text-slate">{s.kind_label}</span>
+                    <span className="truncate font-medium">{s.title}</span>
+                    {s.status !== 'ready' && s.status !== 'failed' && <span className="shrink-0 text-slate">lecture…</span>}
+                    {s.url && (
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="shrink-0 text-slate hover:text-ink"
+                        aria-label={`Ouvrir « ${s.title} » dans ${s.kind_label}`}
+                      >
+                        <ExternalLink size={12} />
+                      </a>
+                    )}
+                    <button
+                      className="shrink-0 text-slate hover:text-ink"
+                      onClick={() => detach(s)}
+                      aria-label={`Retirer « ${s.title} » de la conversation`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="flex items-end gap-2 rounded-lg border border-rule bg-surface p-2 focus-within:border-ledger">
+              {canAttach && (
+                <button
+                  className="btn-ghost h-9 w-9 shrink-0 p-0"
+                  onClick={() => setAttaching(true)}
+                  disabled={streaming}
+                  aria-label="Joindre des pages Confluence ou Notion"
+                  title="Joindre des pages à la conversation"
+                >
+                  <Paperclip size={16} />
+                </button>
+              )}
               <label htmlFor="question" className="sr-only">
                 Votre question
               </label>
@@ -259,6 +390,20 @@ export function Chat() {
           </div>
         </div>
       </div>
+
+      <AttachDialog
+        open={attaching}
+        onClose={() => setAttaching(false)}
+        connections={connections}
+        conversationId={conversationId}
+        onAttached={(result) => {
+          setAttached(result.sources)
+          if (!conversationId) {
+            navigate(`/c/${result.conversation_id}`, { replace: true })
+            window.dispatchEvent(new Event(CONVERSATIONS_CHANGED))
+          }
+        }}
+      />
 
       {panel && panelSources.length > 0 && (
         <SourcePanel

@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.api.routes import admin, auth, chat, collections, health
+from src.api.routes import admin, auth, chat, collections, connectors, health, usage
 from src.auth.users import ensure_bootstrap_admin
 from src.config import get_settings
 from src.db.session import SessionLocal
@@ -69,6 +69,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url="/docs" if settings.environment != "production" else None,
         redoc_url=None,
+        # The schema lists every route and field: not served in production either.
+        openapi_url="/openapi.json" if settings.environment != "production" else None,
     )
 
     app.add_middleware(
@@ -77,6 +79,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+        # Gateway refusal code on /chat/ask (budget_exceeded, rate_limited…), for cross-origin API clients.
+        expose_headers=["X-ContextHub-Error-Code"],
     )
 
     @app.middleware("http")
@@ -117,7 +121,7 @@ def create_app() -> FastAPI:
             status_code=500,
         )
 
-    for module in (health, auth, collections, chat, admin):
+    for module in (health, auth, collections, chat, connectors, admin, usage):
         app.include_router(module.router)
     return app
 

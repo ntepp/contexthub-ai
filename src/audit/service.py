@@ -234,6 +234,20 @@ CSV_COLUMNS = [
 ]
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value) -> str:
+    """Text for one CSV cell that a spreadsheet will not run as a formula.
+
+    The audit trail holds text typed by users (questions, names, group names); a cell
+    starting with ``=``, ``+``, ``-`` or ``@`` is executed by Excel / LibreOffice when
+    the export is opened. A leading apostrophe makes it plain text.
+    """
+    cell = "" if value is None else str(value)
+    return "'" + cell if cell.startswith(_FORMULA_PREFIXES) else cell
+
+
 def export_csv(events: Iterable[AuditEvent]) -> Iterable[str]:
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";")
@@ -242,23 +256,22 @@ def export_csv(events: Iterable[AuditEvent]) -> Iterable[str]:
     for event in events:
         buffer.seek(0)
         buffer.truncate()
-        writer.writerow(
-            [
-                event.id,
-                event.ts.isoformat() if event.ts else "",
-                event.actor_id or "",
-                event.actor_email or "",
-                event.action,
-                event.outcome,
-                event.resource_type or "",
-                event.resource_id or "",
-                event.collection_id or "",
-                event.ip or "",
-                json.dumps(event.details, ensure_ascii=False) if event.details else "",
-                event.prev_hash,
-                event.hash,
-            ]
-        )
+        row = [
+            event.id,
+            event.ts.isoformat() if event.ts else "",
+            event.actor_id or "",
+            event.actor_email or "",
+            event.action,
+            event.outcome,
+            event.resource_type or "",
+            event.resource_id or "",
+            event.collection_id or "",
+            event.ip or "",
+            json.dumps(event.details, ensure_ascii=False) if event.details else "",
+            event.prev_hash,
+            event.hash,
+        ]
+        writer.writerow([_csv_cell(value) for value in row])
         yield buffer.getvalue()
 
 

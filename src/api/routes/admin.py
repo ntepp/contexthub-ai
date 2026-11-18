@@ -13,12 +13,14 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src import instance_settings
 from src.api.deps import actor_of, require_admin
 from src.api.routes.auth import serialize_user
 from src.audit import service as audit
 from src.auth.security import generate_password, hash_password, validate_password_strength
 from src.auth.users import create_local_user, find_by_email
 from src.config import get_settings
+from src.connectors.session_sources import drop_for_conversations
 from src.db.models import (
     ACCESS_EDITOR,
     ACCESS_VIEWER,
@@ -26,6 +28,7 @@ from src.db.models import (
     ROLE_MEMBER,
     Collection,
     CollectionGrant,
+    CollectionGroupGrant,
     Conversation,
     Document,
     Message,
@@ -33,7 +36,19 @@ from src.db.models import (
 )
 from src.db.session import get_db
 from src.ingestion.loaders import ocr_available
-from src.llm.factory import model_catalogue
+from src.llm import gateway
+from src.llm.factory import (
+    AVAILABILITY_AVAILABLE,
+    AVAILABILITY_UNAVAILABLE,
+    AVAILABILITY_UNKNOWN,
+    MODELS_SETTING,
+    CatalogueUnavailable,
+    available_catalogue,
+    ignored_model_entries,
+    model_catalogue,
+    model_offer,
+    validate_offer,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -51,9 +66,20 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class GroupGrantSet(BaseModel):
+    group: str = Field(min_length=1, max_length=255)
+    level: str = Field(pattern=f"^({ACCESS_VIEWER}|{ACCESS_EDITOR})$")
+
+
 class GrantSet(BaseModel):
     user_id: uuid.UUID
     level: str = Field(pattern=f"^({ACCESS_VIEWER}|{ACCESS_EDITOR})$")
+
+
+class ModelsSet(BaseModel):
+    # Loose types: every refusal gets a French message from validate_offer.
+    offered: list[str] | None = None
+    default: str | None = None
 
 
 def _admins_left(db: Session, excluding: uuid.UUID) -> int:
@@ -144,7 +170,9 @@ def delete_user(user_id: uuid.UUID, request: Request, admin: User = Depends(requ
         raise HTTPException(status_code=409, detail="Vous ne pouvez pas supprimer votre propre compte.")
     if user.role == ROLE_ADMIN and _admins_left(db, user.id) == 0:
         raise HTTPException(status_code=409, detail="Impossible : ce compte est le dernier administrateur actif.")
-    conversations = db.execute(select(func.count()).where(Conversation.user_id == user.id)).scalar_one()
+    conversation_ids = list(db.execute(select(Conversation.id).where(Conversation.user_id == user.id)).scalars())
+    conversations = len(conversation_ids)
+    drop_for_conversations(db, conversation_ids)
     db.delete(user)
     redacted = audit.redact_actor(db, user_id)
     db.commit()
@@ -165,7 +193,8 @@ def delete_user(user_id: uuid.UUID, request: Request, admin: User = Depends(requ
 
 def _collection(db: Session, collection_id: uuid.UUID) -> Collection:
     collection = db.get(Collection, collection_id)
-    if collection is None:
+    # Pages attached to a conversation are never shared: no grants on a session collection.
+    if collection is None or collection.conversation_id is not None:
         raise HTTPException(status_code=404, detail="Collection introuvable.")
     return collection
 
@@ -222,6 +251,92 @@ def revoke_grant(
     db.delete(grant)
     db.commit()
     audit.record("grant.revoke", actor_of(request, admin), resource_type="user", resource_id=user_id, collection_id=collection_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SSO group grants
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sso-groups")
+def known_sso_groups(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> list[str]:
+    """Groups seen on SSO logins so far (suggestions; any group name can be granted)."""
+    found: set[str] = set()
+    for groups in db.execute(select(User.oidc_groups).where(User.oidc_groups.is_not(None))).scalars():
+        found.update(g for g in groups or [] if isinstance(g, str))
+    return sorted(found)
+
+
+@router.get("/collections/{collection_id}/group-grants")
+def list_group_grants(collection_id: uuid.UUID, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    collection = _collection(db, collection_id)
+    rows = db.execute(
+        select(CollectionGroupGrant)
+        .where(CollectionGroupGrant.collection_id == collection.id)
+        .order_by(CollectionGroupGrant.group_name)
+    ).scalars()
+    return [{"group": g.group_name, "level": g.level} for g in rows]
+
+
+@router.put("/collections/{collection_id}/group-grants")
+def set_group_grant(
+    collection_id: uuid.UUID,
+    body: GroupGrantSet,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    collection = _collection(db, collection_id)
+    group = body.group.strip()
+    if not group:
+        raise HTTPException(status_code=422, detail="Nom de groupe vide.")
+    grant = db.execute(
+        select(CollectionGroupGrant).where(
+            CollectionGroupGrant.collection_id == collection.id, CollectionGroupGrant.group_name == group
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        db.add(CollectionGroupGrant(collection_id=collection.id, group_name=group, level=body.level))
+    else:
+        grant.level = body.level
+    db.commit()
+    audit.record(
+        "grant.group_set",
+        actor_of(request, admin),
+        resource_type="group",
+        resource_id=group,
+        collection_id=collection.id,
+        details={"group": group, "level": body.level},
+    )
+    return {"ok": True}
+
+
+@router.delete("/collections/{collection_id}/group-grants")
+def revoke_group_grant(
+    collection_id: uuid.UUID,
+    request: Request,
+    group: str = Query(min_length=1, max_length=255),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    grant = db.execute(
+        select(CollectionGroupGrant).where(
+            CollectionGroupGrant.collection_id == collection_id, CollectionGroupGrant.group_name == group
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Droit introuvable.")
+    db.delete(grant)
+    db.commit()
+    audit.record(
+        "grant.group_revoke",
+        actor_of(request, admin),
+        resource_type="group",
+        resource_id=group,
+        collection_id=collection_id,
+        details={"group": group},
+    )
     return {"ok": True}
 
 
@@ -283,6 +398,101 @@ def audit_verify(request: Request, admin: User = Depends(require_admin), db: Ses
 
 
 # ---------------------------------------------------------------------------
+# Offered models (ADR-002)
+# ---------------------------------------------------------------------------
+
+_SETTINGS_DOWN = "Le réglage n'a pas pu être enregistré (base de données indisponible ou migration manquante)."
+
+
+def _models_view() -> dict:
+    """Available catalogue merged with the offer: offered models first, in their order
+    (including those that left the catalogue), then the other available ones."""
+    settings = get_settings()
+    offer = model_offer()
+    catalogue = available_catalogue()
+    known = {} if catalogue is None else {spec.id: spec for spec in catalogue}
+    rows = []
+    for offered in offer.models:
+        state = AVAILABILITY_UNKNOWN if catalogue is None else (
+            AVAILABILITY_AVAILABLE if offered.spec.id in known else AVAILABILITY_UNAVAILABLE
+        )
+        rows.append((offered.spec, state, True))
+    offered_ids = {m.spec.id for m in offer.models}
+    rows += [(spec, AVAILABILITY_AVAILABLE, False) for spec in known.values() if spec.id not in offered_ids]
+    view = {
+        "source": offer.source,
+        "gateway": settings.gateway_enabled,
+        # False when the gateway cannot be reached: nothing can be checked against it.
+        "catalogue_available": catalogue is not None,
+        "default": offer.default_id,
+        "models": [
+            {
+                **spec.as_dict(),
+                "available": state == AVAILABILITY_AVAILABLE,
+                "availability": state,
+                "offered": is_offered,
+                "is_default": is_offered and spec.id == offer.default_id,
+            }
+            for spec, state, is_offered in rows
+        ],
+    }
+    if settings.gateway_enabled:
+        view["console_url"] = settings.gateway_console_url
+    return view
+
+
+def _stored_models() -> dict | None:
+    value = instance_settings.get(MODELS_SETTING)
+    return value if isinstance(value, dict) else None
+
+
+@router.get("/models")
+def admin_models(admin: User = Depends(require_admin)) -> dict:
+    return _models_view()
+
+
+@router.put("/models")
+def set_admin_models(body: ModelsSet, request: Request, admin: User = Depends(require_admin)) -> dict:
+    try:
+        offered, default = validate_offer(body.offered, body.default)
+    except CatalogueUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    old = _stored_models()
+    new = {"offered": offered, "default": default}
+    try:
+        instance_settings.put(MODELS_SETTING, new, admin.id)
+    except instance_settings.SettingsUnavailable:
+        raise HTTPException(status_code=503, detail=_SETTINGS_DOWN)
+    audit.record(
+        "settings.models_set",
+        actor_of(request, admin),
+        resource_type="settings",
+        resource_id=MODELS_SETTING,
+        details={"old": old, "new": new},
+    )
+    return _models_view()
+
+
+@router.delete("/models")
+def reset_admin_models(request: Request, admin: User = Depends(require_admin)) -> dict:
+    old = _stored_models()
+    try:
+        instance_settings.delete(MODELS_SETTING)
+    except instance_settings.SettingsUnavailable:
+        raise HTTPException(status_code=503, detail=_SETTINGS_DOWN)
+    audit.record(
+        "settings.models_reset",
+        actor_of(request, admin),
+        resource_type="settings",
+        resource_id=MODELS_SETTING,
+        details={"old": old, "new": None},
+    )
+    return _models_view()
+
+
+# ---------------------------------------------------------------------------
 # System status
 # ---------------------------------------------------------------------------
 
@@ -293,6 +503,16 @@ def _check_db(db: Session) -> dict:
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__}
+
+
+def _check_db_and_settings(db: Session) -> dict:
+    """Database check, with a note when the settings table is missing (chat still works on
+    the environment defaults, but the offered models cannot be changed)."""
+    check = _check_db(db)
+    if check["ok"] and instance_settings.probe().get("error") == "missing_table":
+        check["migration_missing"] = True
+        check["notes"] = [instance_settings.MISSING_TABLE_NOTE]
+    return check
 
 
 def _check_redis() -> dict:
@@ -307,7 +527,10 @@ def _check_workers() -> dict:
     try:
         from src.workers.celery_app import celery_app
 
-        replies = celery_app.control.inspect(timeout=1.0).ping() or {}
+        with celery_app.connection_for_read() as conn:
+            # Fail fast when the broker is down (the default retries cost ~6 s per call).
+            conn.ensure_connection(max_retries=1, interval_start=0, interval_step=0, timeout=1)
+            replies = celery_app.control.inspect(timeout=1.0, connection=conn).ping() or {}
         return {"ok": bool(replies), "workers": sorted(replies)}
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__}
@@ -322,12 +545,30 @@ def _check_ollama() -> dict:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def _check_gateway() -> dict:
+    """Chat side (``ok``, ``error``, served ``models``) plus configuration notes: ``ok``
+    stays true when chat works even if consumption cannot be read."""
+    check = gateway.probe()
+    settings = get_settings()
+    notes = []
+    check["consumption"] = bool(settings.llm_gateway_admin_key)
+    if not check["consumption"]:
+        notes.append("Lecture de la consommation non configurée : définissez LLM_GATEWAY_ADMIN_KEY.")
+    ignored = ignored_model_entries()
+    if ignored:
+        notes.append("LLM_MODELS : entrées ignorées en mode passerelle : " + ", ".join(ignored) + ".")
+    check["notes"] = notes
+    return check
+
+
 @router.get("/system")
 def system_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
     settings = get_settings()
     counts = {
         "users": db.execute(select(func.count()).select_from(User)).scalar_one(),
-        "collections": db.execute(select(func.count()).select_from(Collection)).scalar_one(),
+        "collections": db.execute(
+            select(func.count()).select_from(Collection).where(Collection.conversation_id.is_(None))
+        ).scalar_one(),
         "documents": db.execute(select(func.count()).select_from(Document)).scalar_one(),
         "messages": db.execute(select(func.count()).select_from(Message)).scalar_one(),
     }
@@ -335,6 +576,8 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
     probes = {"redis": _check_redis, "workers": _check_workers, "ocr": ocr_available}
     if uses_ollama:
         probes["ollama"] = _check_ollama
+    if settings.gateway_enabled:
+        probes["gateway"] = _check_gateway
     # Each probe may wait on a timeout: run them side by side, not one after another.
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         futures = {name: pool.submit(fn) for name, fn in probes.items()}
@@ -343,7 +586,7 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
     return {
         "version": settings.app_version,
         "environment": settings.environment,
-        "checks": {"database": _check_db(db), **results},
+        "checks": {"database": _check_db_and_settings(db), **results},
         "counts": counts,
         "configuration": {
             "models": [m.as_dict() for m in model_catalogue()],

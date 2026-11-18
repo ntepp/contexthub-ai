@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { BookOpen, LogOut, MessageSquarePlus, Settings2, ShieldCheck, Trash2, UserRound } from 'lucide-react'
-import { api, type ConversationSummary } from '@/lib/api'
+import { BookOpen, ChartColumn, LogOut, MessageSquarePlus, Settings2, ShieldCheck, Trash2, UserRound } from 'lucide-react'
+import { api, MODELS_CHANGED, type ConversationSummary } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, relativeDay } from '@/lib/utils'
 
@@ -31,6 +31,21 @@ export function Sidebar() {
   const location = useLocation()
   const conversationId = location.pathname.startsWith('/c/') ? location.pathname.slice(3) : undefined
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  // Consumption is only tracked behind an LLM gateway, whose models are "gateway:…". The model
+  // list is shared with the chat page and requested once per session (`api.models`).
+  const [gatewayMode, setGatewayMode] = useState(false)
+
+  useEffect(() => {
+    const load = () =>
+      api
+        .models()
+        .then((data) => setGatewayMode(data.models.some((m) => m.provider === 'gateway')))
+        .catch(() => {})
+    load()
+    // The administrator changed the offered models (Administration › Modèles).
+    window.addEventListener(MODELS_CHANGED, load)
+    return () => window.removeEventListener(MODELS_CHANGED, load)
+  }, [])
 
   useEffect(() => {
     const load = () => api.conversations().then(setConversations).catch(() => {})
@@ -106,6 +121,11 @@ export function Sidebar() {
         {user?.role === 'admin' && (
           <NavItem to="/admin" icon={ShieldCheck}>
             Administration
+          </NavItem>
+        )}
+        {gatewayMode && (
+          <NavItem to="/consommation" icon={ChartColumn}>
+            Ma consommation
           </NavItem>
         )}
         <NavItem to="/compte" icon={Settings2}>

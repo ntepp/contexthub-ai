@@ -9,6 +9,7 @@ const CHECK_LABELS: Record<string, string> = {
   redis: "File d'attente (Redis)",
   workers: "Workers d'indexation",
   ollama: 'Serveur de modèles local (Ollama)',
+  gateway: 'Passerelle LLM',
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -49,10 +50,18 @@ export function System() {
               <span className={cn('font-medium', check.ok ? 'text-ledger' : 'text-danger')}>
                 {check.ok ? 'Opérationnel' : `Indisponible${check.error ? ` (${check.error})` : ''}`}
               </span>
-              {check.workers && check.workers.length > 0 && (
+              {/* The gateway check used to copy its notes into `workers`: when it sends `notes`, only those are shown. */}
+              {check.workers && check.workers.length > 0 && !(key === 'gateway' && check.notes) && (
                 <span className="block text-xs text-slate">{check.workers.join(', ')}</span>
               )}
               {check.models && <span className="block text-xs text-slate">{check.models.join(', ')}</span>}
+              {check.notes && check.notes.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-xs text-refusal">
+                  {check.notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
             </Row>
           ))}
         </dl>

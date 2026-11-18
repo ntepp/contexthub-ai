@@ -31,7 +31,7 @@ from langgraph.graph import START, StateGraph
 from typing_extensions import TypedDict
 
 from src.config import get_settings
-from src.llm.factory import ModelSpec, resolve_model
+from src.llm.factory import ModelSpec, parse_model_id, resolve_model
 from src.llm.llm_chain import initialize_model_llm
 from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
 from src.retrieval.embeddings import get_embeddings
@@ -104,6 +104,8 @@ class State(TypedDict, total=False):
     history: list[tuple[str, str]]
     collection_ids: list[str]
     model_id: str
+    # ContextHub UUID of the asking user: attributes LLM calls at the gateway (never an e-mail).
+    user_id: str
     standalone_question: str
     search_queries: list[str]
     context: list[RetrievedChunk]
@@ -158,11 +160,17 @@ def cited_indices(answer: str) -> set[int]:
     return found
 
 
+_LEADING_HEADINGS = re.compile(r"\A(?:#{1,6} [^\n]*\n+)+(?=\S)")
+
+
 def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
     sources = []
     for index, chunk in enumerate(chunks, start=1):
         meta = chunk.metadata or {}
         body = chunk.content.split("\n", 1)[1] if chunk.content.startswith("[") and "\n" in chunk.content else chunk.content
+        # Markdown / HTML sections start with their own heading line, already shown as the
+        # section path: keep it out of the excerpt when text follows.
+        body = _LEADING_HEADINGS.sub("", body, count=1) or body
         sources.append(
             {
                 "index": index,
@@ -175,6 +183,8 @@ def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
                 "section_path": meta.get("section_path") or [],
                 "snippet": body[:600],
                 "distance": round(chunk.distance, 4),
+                "url": meta.get("source_url"),
+                "source_kind": meta.get("source_kind"),
                 "cited": False,
             }
         )
@@ -248,7 +258,9 @@ def interleave(ranked: Sequence[Sequence[RetrievedChunk]], limit: int) -> list[R
 
 
 def _spec(state: State) -> ModelSpec:
-    return resolve_model(state.get("model_id"))
+    # Validated against the allow-list when the state was built: no catalogue lookup
+    # (a possible blocking gateway call) inside the graph's nodes.
+    return parse_model_id(state["model_id"])
 
 
 async def _search(query: str, collection_ids: list[uuid.UUID]) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
@@ -282,7 +294,7 @@ async def condense(state: State) -> dict:
     transcript = "\n".join(
         f"{'User' if role == 'user' else 'Assistant'}: {content[:1500]}" for role, content in turns
     )
-    llm = initialize_model_llm(_spec(state))
+    llm = initialize_model_llm(_spec(state), user_id=state.get("user_id"), step="condense")
     response = await llm.ainvoke([HumanMessage(CONDENSE_PROMPT.format(history=transcript, question=question))])
     rewritten = (response.content if isinstance(response.content, str) else str(response.content)).strip()
     rewritten = rewritten.splitlines()[0].strip() if rewritten else ""
@@ -335,7 +347,7 @@ async def plan(state: State) -> dict:
         RAG_RETAINED_CHUNKS.observe(len(state.get("context") or []))
         return {}
     question = state.get("standalone_question") or state["question"]
-    llm = initialize_model_llm(_spec(state))
+    llm = initialize_model_llm(_spec(state), user_id=state.get("user_id"), step="plan")
     response = await llm.ainvoke(
         [HumanMessage(PLAN_PROMPT.format(max_queries=settings.agentic_max_queries, question=question))]
     )
@@ -373,7 +385,7 @@ async def generate(state: State) -> dict:
         SystemMessage(system_prompt()),
         HumanMessage(f"Sources:\n\n{format_sources(state['context'])}\n\nQuestion: {state['question']}"),
     ]
-    llm = initialize_model_llm(spec)
+    llm = initialize_model_llm(spec, user_id=state.get("user_id"), step="generate")
     started = time.time()
     full = ""
     async for chunk in llm.astream(messages):
@@ -407,14 +419,18 @@ def graph():
     return _GRAPH
 
 
-def _initial_state(question, collection_ids, history, model_id) -> State:
-    spec = resolve_model(model_id)  # raises ModelNotAllowed before any work
-    return {
+async def _initial_state(question, collection_ids, history, model_id, user_id=None) -> State:
+    # Raises ModelNotAllowed before any work; in a thread, the catalogue may call the gateway.
+    spec = await asyncio.to_thread(resolve_model, model_id)
+    state: State = {
         "question": question,
         "collection_ids": [str(c) for c in collection_ids],
         "history": list(history or []),
         "model_id": spec.id,
     }
+    if user_id is not None:
+        state["user_id"] = str(uuid.UUID(str(user_id)))
+    return state
 
 
 def _result(state: dict, started: float) -> RAGResult:
@@ -444,9 +460,10 @@ async def answer_question(
     collection_ids: Sequence[uuid.UUID | str],
     history: Sequence[tuple[str, str]] | None = None,
     model_id: str | None = None,
+    user_id: uuid.UUID | str | None = None,
 ) -> RAGResult:
     started = time.time()
-    state = await graph().ainvoke(_initial_state(question, collection_ids, history, model_id))
+    state = await graph().ainvoke(await _initial_state(question, collection_ids, history, model_id, user_id))
     return _result(state, started)
 
 
@@ -455,6 +472,7 @@ async def stream_answer(
     collection_ids: Sequence[uuid.UUID | str],
     history: Sequence[tuple[str, str]] | None = None,
     model_id: str | None = None,
+    user_id: uuid.UUID | str | None = None,
 ) -> AsyncIterator[dict]:
     """Yield ``{"type": "token", "content"}`` events, then one ``{"type": "result", ...}``.
 
@@ -464,7 +482,7 @@ async def stream_answer(
     retrieve end event, otherwise the UI would render an empty bubble.
     """
     started = time.time()
-    initial = _initial_state(question, collection_ids, history, model_id)
+    initial = await _initial_state(question, collection_ids, history, model_id, user_id)
     final_state: dict | None = None
     async for event in graph().astream_events(initial, version="v2"):
         kind = event["event"]
@@ -487,7 +505,9 @@ async def stream_answer(
     yield {"type": "result", **_result(final_state, started).as_dict()}
 
 
-async def create_and_run_graph(question: str, collection: str = "default", model_id: str | None = None) -> dict:
+async def create_and_run_graph(
+    question: str, collection: str = "default", model_id: str | None = None, user_id: uuid.UUID | str | None = None
+) -> dict:
     """Compatibility entry point (evaluation harness, scripts): collection by name."""
     from src.db.models import Collection
     from src.db.session import SessionLocal
@@ -499,4 +519,4 @@ async def create_and_run_graph(question: str, collection: str = "default", model
         db.close()
     if col is None:
         raise ValueError(f"Collection inconnue : {collection}")
-    return (await answer_question(question, [col.id], model_id=model_id)).as_dict()
+    return (await answer_question(question, [col.id], model_id=model_id, user_id=user_id)).as_dict()

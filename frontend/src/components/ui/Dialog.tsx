@@ -1,6 +1,6 @@
 import * as RadixDialog from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 interface DialogProps {
@@ -14,11 +14,25 @@ interface DialogProps {
 }
 
 export function Dialog({ open, onOpenChange, title, description, children, footer, wide }: DialogProps) {
+  // Without a Radix Trigger, closing would leave the focus on the page body: it goes back to the
+  // element that had it when the dialog opened (read before Radix moves it into the dialog).
+  const opener = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (open) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }, [open])
+
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-40 bg-ink/30" />
         <RadixDialog.Content
+          onCloseAutoFocus={(event) => {
+            const target = opener.current
+            if (target && target.isConnected) {
+              event.preventDefault()
+              target.focus()
+            }
+          }}
           className={cn(
             'fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-rule bg-surface p-6 shadow-xl',
             wide ? 'max-w-5xl' : 'max-w-md',

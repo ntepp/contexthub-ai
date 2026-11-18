@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -12,13 +13,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.deps import accessible_collections, actor_of, current_user, load_collection
+from src.api.routes.connectors import serialize_sources
 from src.audit import service as audit
 from src.audit.service import Actor
 from src.auth.rate_limit import limiter
 from src.config import get_settings
+from src.connectors import session_sources
 from src.db.models import ACCESS_VIEWER, Collection, Conversation, Message, User, utcnow
 from src.db.session import SessionLocal, get_db
-from src.llm.factory import LLMProvider, ModelNotAllowed, default_model, model_catalogue, resolve_model
+from src.llm import gateway
+from src.llm.factory import (
+    AVAILABILITY_AVAILABLE,
+    AVAILABILITY_UNAVAILABLE,
+    AVAILABILITY_UNKNOWN,
+    LLMProvider,
+    ModelNotAllowed,
+    ModelSpec,
+    model_catalogue,
+    model_offer,
+    resolve_model,
+)
 from src.rag.rag_pipeline import RAGResult, answer_question, stream_answer
 from src.utils.logging_config import get_logger
 
@@ -26,6 +40,9 @@ log = get_logger()
 router = APIRouter(tags=["chat"])
 
 _AUDIT_TEXT_LIMIT = 20_000
+_DEFAULT_TITLE = "Nouvelle conversation"
+_ENGINE_DOWN = "Le moteur de réponse est indisponible. Réessayez dans un instant."
+ERROR_CODE_HEADER = "X-ContextHub-Error-Code"
 
 
 class AskRequest(BaseModel):
@@ -34,6 +51,8 @@ class AskRequest(BaseModel):
     collection: str | None = Field(default=None, description="Nom de collection (compatibilité v0)")
     conversation_id: uuid.UUID | None = None
     model: str | None = None
+    # Search only the pages attached to the conversation (Confluence, Notion…).
+    attached_only: bool = False
 
 
 class FeedbackRequest(BaseModel):
@@ -56,16 +75,29 @@ class PreparedAsk:
     user_id: uuid.UUID
 
 
-def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> PreparedAsk:
+def _prepare(body: AskRequest, request: Request, user: User, db: Session, catalogue: list[ModelSpec]) -> PreparedAsk:
     settings = get_settings()
     if not limiter.hit(f"rl:ask:{user.id}", settings.ask_rate_limit_per_minute, 60):
         raise HTTPException(status_code=429, detail="Trop de questions en une minute, patientez un instant.")
     try:
-        spec = resolve_model(body.model)
+        spec = resolve_model(body.model, catalogue)
     except (ModelNotAllowed, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    if body.collection_ids:
+    conversation: Conversation | None = None
+    attached_id: uuid.UUID | None = None
+    if body.conversation_id:
+        conversation = db.get(Conversation, body.conversation_id)
+        if conversation is None or conversation.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation introuvable.")
+        attached = session_sources.session_collection(db, conversation.id)
+        attached_id = attached.id if attached is not None else None
+
+    if body.attached_only:
+        if attached_id is None:
+            raise HTTPException(status_code=400, detail="Aucune page n'est jointe à cette conversation.")
+        collection_ids = []
+    elif body.collection_ids:
         collection_ids = [load_collection(db, user, cid, ACCESS_VIEWER).id for cid in body.collection_ids]
     elif body.collection:
         col = db.execute(select(Collection).where(Collection.name == body.collection)).scalar_one_or_none()
@@ -74,16 +106,16 @@ def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> Pre
         collection_ids = [load_collection(db, user, col.id, ACCESS_VIEWER).id]
     else:
         collection_ids = [c.id for c, _ in accessible_collections(db, user)]
-    if not collection_ids:
+    if not collection_ids and attached_id is None:
         raise HTTPException(status_code=400, detail="Aucune collection accessible : demandez un accès à l'administrateur.")
 
     question = body.question.strip()
     history: list[tuple[str, str]] = []
-    if body.conversation_id:
-        conversation = db.get(Conversation, body.conversation_id)
-        if conversation is None or conversation.user_id != user.id:
-            raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    if conversation is not None:
         history = [(m.role, m.content) for m in conversation.messages][-2 * settings.history_turns :]
+        if not conversation.messages and conversation.title == _DEFAULT_TITLE:
+            # Conversation opened by attaching pages: name it after its first question.
+            conversation.title = question[:80] + ("…" if len(question) > 80 else "")
     else:
         conversation = Conversation(
             user_id=user.id,
@@ -91,10 +123,12 @@ def _prepare(body: AskRequest, request: Request, user: User, db: Session) -> Pre
             collection_ids=[str(c) for c in collection_ids],
         )
         db.add(conversation)
+    # The stored scope lists the regular collections only; attached pages are implied.
     conversation.collection_ids = [str(c) for c in collection_ids]
     conversation.updated_at = utcnow()
     db.commit()
-    return PreparedAsk(question, collection_ids, conversation.id, history, spec.id, actor_of(request, user), user.id)
+    searched = collection_ids + ([attached_id] if attached_id is not None else [])
+    return PreparedAsk(question, searched, conversation.id, history, spec.id, actor_of(request, user), user.id)
 
 
 def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
@@ -140,6 +174,7 @@ def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
                     "filename": s["filename"],
                     "page": s["page"],
                     "section": s["section"],
+                    "url": s.get("url"),
                     "cited": s["cited"],
                 }
                 for s in result.sources
@@ -147,6 +182,33 @@ def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
         },
     )
     return message_id
+
+
+def _failure(prepared: PreparedAsk, exc: Exception, where: str) -> tuple[int, str, str | None]:
+    """Log and audit a failed answer; (HTTP status, French message, refusal kind)."""
+    refusal = gateway.classify_error(exc)
+    details: dict = {"question": prepared.question}
+    if refusal is None:
+        log.exception("[%s] échec du pipeline RAG", where)
+        audit.record("query.ask", prepared.actor, outcome="failure", details=details)
+        return 502, _ENGINE_DOWN, None
+    # Expected refusal (budget, rate limit, gateway down): no stack trace, no secret.
+    log.warning(
+        "[%s] refus de la passerelle LLM : %s (utilisateur=%s, modèle=%s, %s)",
+        where,
+        refusal.kind,
+        prepared.user_id,
+        prepared.model_id,
+        type(exc).__name__,
+    )
+    details["reason"] = refusal.kind
+    audit.record("query.ask", prepared.actor, outcome="failure", details=details)
+    return refusal.status_code, refusal.message, refusal.kind
+
+
+async def _catalogue() -> list[ModelSpec]:
+    # Blocking (offered-models setting in the database, gateway lookup): off the event loop.
+    return await asyncio.to_thread(model_catalogue)
 
 
 def _response(prepared: PreparedAsk, result: RAGResult, message_id: uuid.UUID) -> dict:
@@ -159,13 +221,16 @@ def _response(prepared: PreparedAsk, result: RAGResult, message_id: uuid.UUID) -
 
 @router.post("/chat/ask")
 async def ask(body: AskRequest, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    prepared = _prepare(body, request, user, db)
+    prepared = _prepare(body, request, user, db, await _catalogue())
     try:
-        result = await answer_question(prepared.question, prepared.collection_ids, prepared.history, prepared.model_id)
-    except Exception:
-        log.exception("[ask] échec du pipeline RAG")
-        audit.record("query.ask", prepared.actor, outcome="failure", details={"question": prepared.question})
-        raise HTTPException(status_code=502, detail="Le moteur de réponse est indisponible. Réessayez dans un instant.")
+        result = await answer_question(
+            prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
+        )
+    except Exception as exc:
+        status, message, kind = _failure(prepared, exc, "ask")
+        # Same code as the SSE error event: lets API clients tell a gateway 429 from ours.
+        headers = {ERROR_CODE_HEADER: kind} if kind else None
+        raise HTTPException(status_code=status, detail=message, headers=headers)
     message_id = _persist(prepared, result)
     return _response(prepared, result, message_id)
 
@@ -182,24 +247,26 @@ def _sse(payload: dict) -> str:
 async def ask_stream(
     body: AskRequest, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
-    prepared = _prepare(body, request, user, db)
+    prepared = _prepare(body, request, user, db, await _catalogue())
 
     async def events():
         yield _sse({"type": "meta", "conversation_id": str(prepared.conversation_id), "model": prepared.model_id})
         result: RAGResult | None = None
         try:
             async for event in stream_answer(
-                prepared.question, prepared.collection_ids, prepared.history, prepared.model_id
+                prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
             ):
                 if event["type"] == "token":
                     yield _sse(event)
                 elif event["type"] == "result":
                     payload = {k: v for k, v in event.items() if k != "type"}
                     result = RAGResult(**payload)
-        except Exception:
-            log.exception("[stream] échec du pipeline RAG")
-            audit.record("query.ask", prepared.actor, outcome="failure", details={"question": prepared.question})
-            yield _sse({"type": "error", "message": "Le moteur de réponse est indisponible. Réessayez dans un instant."})
+        except Exception as exc:
+            status, message, kind = _failure(prepared, exc, "stream")
+            error = {"type": "error", "message": message}
+            if kind is not None:
+                error.update(code=kind, status=status)
+            yield _sse(error)
             return
         finally:
             if result is None:
@@ -269,6 +336,7 @@ def get_conversation(conversation_id: uuid.UUID, user: User = Depends(current_us
         "title": c.title,
         "collection_ids": c.collection_ids or [],
         "messages": [_serialize_message(m) for m in c.messages],
+        "sources": serialize_sources(db, c.id),
     }
 
 
@@ -287,6 +355,7 @@ def delete_conversation(
     conversation_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
 ) -> dict:
     c = _own_conversation(db, user, conversation_id)
+    session_sources.drop_for_conversations(db, [c.id])
     db.delete(c)
     db.commit()
     audit.record("conversation.delete", actor_of(request, user), resource_type="conversation", resource_id=conversation_id)
@@ -333,22 +402,38 @@ async def _ollama_available() -> set[str] | None:
         return None
 
 
+def _state(ok: bool | None) -> str:
+    return AVAILABILITY_UNKNOWN if ok is None else AVAILABILITY_AVAILABLE if ok else AVAILABILITY_UNAVAILABLE
+
+
 @router.get("/models")
 async def list_models(user: User = Depends(current_user)) -> dict:
+    """Offered models, in the administrator's order. ``availability``: ``available``,
+    ``unavailable`` (left the catalogue, not installed, no key…) or ``unknown`` (gateway or
+    Ollama unreachable); ``available`` is its boolean form (true only when available)."""
     settings = get_settings()
-    installed = await _ollama_available()
+    # Blocking lookups (database setting, gateway catalogue; both cached): off the event loop.
+    offer = await asyncio.to_thread(model_offer)
+    served = await asyncio.to_thread(gateway.served_models) if settings.gateway_enabled else None
+    installed = None if settings.gateway_enabled else await _ollama_available()
     models = []
-    for spec in model_catalogue():
-        entry = spec.as_dict()
-        if spec.provider == LLMProvider.OLLAMA:
-            entry["available"] = installed is not None and (
-                spec.name in installed or f"{spec.name}:latest" in installed
-            )
+    for offered in offer.models:
+        spec = offered.spec
+        ok: bool | None
+        if offered.available is False:
+            ok = False
+        elif settings.gateway_enabled:
+            # Same answer as /admin/models: unknown while the gateway cannot be reached.
+            ok = spec.provider == LLMProvider.GATEWAY and (None if served is None else spec.name in served)
+        elif spec.provider == LLMProvider.OLLAMA:
+            ok = None if installed is None else (spec.name in installed or f"{spec.name}:latest" in installed)
         elif spec.provider == LLMProvider.OPENAI:
-            entry["available"] = bool(settings.openai_api_key)
+            ok = bool(settings.openai_api_key)
         elif spec.provider == LLMProvider.ANTHROPIC:
-            entry["available"] = bool(settings.anthropic_api_key)
+            ok = bool(settings.anthropic_api_key)
+        elif spec.provider == LLMProvider.OPENAI_COMPATIBLE:
+            ok = bool(settings.openai_compatible_base_url)
         else:
-            entry["available"] = bool(settings.openai_compatible_base_url)
-        models.append(entry)
-    return {"models": models, "default": default_model().id}
+            ok = False  # gateway:… entry while no gateway is configured
+        models.append({**spec.as_dict(), "available": ok is True, "availability": _state(ok)})
+    return {"models": models, "default": offer.default_id}

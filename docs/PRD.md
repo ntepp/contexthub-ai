@@ -88,6 +88,7 @@ que le produit leur soit réservé.
 | AUTH-6 | Clés d'API personnelles (hachées) pour intégrations | Should |
 | AUTH-7 | Limitation des tentatives de connexion | Must |
 | AUTH-8 | Création du premier administrateur au démarrage ou en CLI | Must |
+| AUTH-9 | Droits par groupe de l'annuaire : une collection peut être ouverte à un groupe SSO (lecture ou modification) ; l'appartenance est relue à chaque connexion | Should |
 
 #### Base documentaire (DOC)
 | ID | Exigence | Priorité |
@@ -98,6 +99,7 @@ que le produit leur soit réservé.
 | DOC-4 | Découpage tenant compte de la structure : titres Word et Markdown, Titre / Chapitre / Section / Article | Must |
 | DOC-10 | Reconnaissance des actes européens et de leur nom d'usage, transverses (RGPD, AI Act, NIS 2…) et sectoriels (MiFID II, DORA…) | Should |
 | DOC-11 | Découpage des définitions : un passage par définition (articles « Définitions », glossaires, lexiques), phrase d'introduction répétée, terme dans le chemin de section | Should |
+| DOC-12 | Connecteurs à chaud (Confluence Cloud / Data Center, Notion) : l'utilisateur joint des pages à une conversation, par lien ou par recherche filtrée (mots, espace, étiquette) ; aucune synchronisation en masse ; les pages sont supprimées avec la conversation ; la citation ouvre la page dans son outil d'origine | Should |
 | DOC-5 | Suppression d'un document (fichier, vecteurs, métadonnées) | Must |
 | DOC-6 | Suppression d'une collection complète | Must |
 | DOC-7 | Ingestion idempotente : un retry ne crée jamais de doublons | Must |
@@ -168,10 +170,14 @@ que le produit leur soit réservé.
 ### 5.3 Hors périmètre v1
 
 - SaaS multi-tenant, facturation en ligne.
-- Connecteurs (SharePoint, Confluence, Google Drive) — candidats v1.1.
+- Synchronisation en masse d'un espace documentaire externe (les connecteurs Confluence et Notion
+  lisent des pages choisies, à la demande — DOC-12). Connecteurs SharePoint et Google Drive : candidats v1.1.
+- Connexion à Confluence / Notion avec les droits de chaque utilisateur (OAuth par utilisateur) :
+  en v1 la connexion utilise un compte de service défini par l'administrateur.
 - Veille réglementaire automatique (synchronisation EUR-Lex / AMF) — candidat v1.2.
 - Application mobile.
-- Groupes / synchronisation SCIM.
+- Synchronisation SCIM (les groupes sont lus dans le jeton à chaque connexion SSO — AUTH-9 ; un
+  départ du groupe prend effet à la connexion suivante, pas immédiatement).
 
 ## 6. Parcours clés
 
@@ -240,13 +246,17 @@ affiché aux utilisateurs (décision issue de la mesure).
 | Licence MIT | ✅ | `LICENSE`, `CONTRIBUTING.md` (contributions sous MIT) |
 | Positionnement générique | ✅ | Prompt système neutre, contexte métier configurable (`ASSISTANT_CONTEXT`), textes européens transverses reconnus (RGPD, AI Act, NIS 2, Data Act, CSRD…) |
 | Configuration centralisée | ✅ | `src/config.py`, garde-fous de production, traçage externe désactivé par défaut |
+| AUTH-9 Droits par groupe SSO | ✅ | `hub_collection_group_grants`, groupes du jeton conservés sur le compte (`hub_users.oidc_groups`) et relus à chaque connexion, meilleur niveau entre droit nominatif et droit de groupe, écran *Administration › Accès*, audit `grant.group_set` / `grant.group_revoke` ; Keycloak local avec comptes de démonstration (`deploy/keycloak/`, profil compose `sso`) et test e2e de connexion |
 | AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
 | DOC-11 Découpage des définitions | ✅ | `definition_items()` dans `src/ingestion/chunking.py` : listes numérotées (« 8) «terme», … ») et à puces (« - **Terme** : … »), sous-points rattachés ; `CHUNK_DEFINITIONS` ; documents existants : `cli reindex` |
+| DOC-12 Connecteurs à chaud | ✅ | `src/connectors/` (Confluence REST v1 + CQL, Notion API), connexions gérées par l'administrateur (jeton chiffré, jamais renvoyé), pages jointes dans une « collection de session » privée à la conversation (`hub_collections.conversation_id`), périmètre « Pages jointes uniquement », citations ouvrant la page d'origine, journal d'audit (`connection.*`, `source.attach`, `source.detach`) ; test e2e avec un faux Confluence (`tests/e2e/mock_confluence.py`) |
 | DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
 | QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
 | QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
 | QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
 | LLM-1 à LLM-4 | ✅ | Ollama, Anthropic, OpenAI, endpoint compatible OpenAI (Mistral, vLLM) |
+| Passerelle LLM et consommation (ADR-001, lot 1) | 🟡 | `LLM_GATEWAY_*` : tous les appels de modèle via une passerelle compatible OpenAI (LiteLLM), attribués à l'UUID de l'utilisateur et à l'étape ; modèles `gateway:<nom>` ; refus de la passerelle (budget 402, débit 429, indisponibilité 503/502) affichés dans le chat, encart « Budget atteint » ; pages *Ma consommation* (période, coût, requêtes, jetons, budget, évolution par jour, par modèle) et *Administration › Consommation* (par utilisateur, export CSV) lues à la passerelle, aucune donnée de coût stockée ; LiteLLM de développement (`deploy/litellm/`, profil compose `gateway`). Reste : vérification de bout en bout contre une passerelle LiteLLM réelle |
+| Modèles et budgets pilotés depuis l'administration (ADR-002, lot 2) | 🟡 | **Implémenté et testé sur simulations ; non validé contre une passerelle LiteLLM réelle.** *Administration des modèles* : table `hub_settings` (migration `69ab4256`, absence signalée dans *Administration › Système*), `GET/PUT/DELETE /admin/models` (modèles proposés et modèle par défaut choisis dans le catalogue disponible : modèles servis par la passerelle, sinon `LLM_MODELS` ; priorité au réglage sur l'environnement ; état `available`/`unavailable`/`unknown` identique dans `/models` ; lien vers la console de la passerelle quand il est ouvrable depuis un navigateur), modèle retiré refusé par `/chat/ask` et `/chat/stream`, y compris pour une conversation existante. *Budgets par utilisateur* : `GET/PUT/DELETE /admin/users/{id}/budget` (jour, semaine, 30 jours ; devise de la passerelle), écrits à la passerelle sur un budget dédié `contexthub-<uuid>`, jamais de budget de console modifié (retrait refusé, 409) ; budgets dans `/admin/usage` (lecture bornée, échec partiel signalé) ; `LLM_GATEWAY_KIND` validé au démarrage. *Audit* : `settings.models_set`, `settings.models_reset`, `budget.set`, `budget.remove` (ancienne et nouvelle valeur dans la même forme, utilisateur visé par son UUID, aucune dépense), chaîne vérifiée. Écrans d'administration livrés par le développeur interface. Reste : essai de bout en bout avec la passerelle de développement (`deploy/litellm/`) et tests PostgreSQL |
 | AUD-1 à AUD-5 | ✅ | Journal chaîné SHA-256, vérification (UI + CLI), export CSV, rétention, effacement RGPD sans rupture de chaîne |
 | ADM-1 à ADM-3 | ✅ | Utilisateurs, accès par collection, état du système et flux de données |
 | EVAL-1 à EVAL-3 | ✅ | `eval/`, métriques dont calibration, rapports JSON + CSV |
@@ -255,7 +265,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | NFR-2 Confidentialité | ✅ | Mode 100 % local vérifié ; polices auto-hébergées, CSP sans ressource externe |
 | NFR-3 Installation | ✅ | `docker compose up -d` testé de bout en bout (build, migrations, nginx, indexation, streaming SSE) |
 | NFR-4 Exploitation | ✅ | `/health`, `/ready`, `/metrics`, logs JSON, sauvegarde + restauration testées |
-| NFR-5 Qualité | ✅ | 93 tests (SQLite + PostgreSQL/pgvector réel), ruff, CI GitHub Actions |
+| NFR-5 Qualité | ✅ | 150 tests (SQLite + PostgreSQL/pgvector réel) et 3 scénarios e2e Playwright, ruff, CI GitHub Actions |
 | NFR-6 Reproductibilité | ✅ | Dépendances Python épinglées, `package-lock.json` |
 | NFR-7 Langue | ✅ | Interface en français |
 | NFR-8 Performance | ⚠️ | Ingestion : 25 s pour 148 pages ✅. Réponse : non mesurée sur matériel cible (69 s sur GPU portable 4 Go partagé) |
@@ -270,7 +280,7 @@ affiché aux utilisateurs (décision issue de la mesure).
 | 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) | Technique |
 | 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
 | 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |
-| 🟡 | v1.1 : connecteurs SharePoint / Confluence, groupes SSO → droits, export du journal vers SIEM | Technique |
+| 🟡 | v1.1 : connecteur SharePoint, connexion aux connecteurs avec les droits de chaque utilisateur (OAuth), synchronisation SCIM, export du journal vers SIEM | Technique |
 
 ## 13. Évolutions
 
@@ -281,4 +291,5 @@ Une évolution = une branche `feature/<nom>` issue de `master`, une pull request
 | Recherche agentique (QA-12) | `feature/agentic-retrieval` | ✅ Livrée — mesures en §10 |
 | Découpage des définitions point par point (DOC-11) | `feature/definition-chunking` | ✅ Livrée — mesures en §10 |
 | Jeu de référence RH (EVAL-4) | `feature/hr-golden-dataset` | ✅ Livrée — mesures en §10 |
-| Connecteurs documentaires (SharePoint, Confluence…) | `feature/document-connectors` | À cadrer avant développement |
+| Connecteurs à chaud Confluence et Notion (DOC-12) | `feature/document-connectors` | ✅ Livrée — pages jointes à la conversation, sans synchronisation |
+| Droits par groupe SSO et Keycloak de développement (AUTH-9) | `feature/keycloak-dev-sso` | ✅ Livrée |

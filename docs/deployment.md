@@ -62,6 +62,12 @@ essai sans TLS uniquement : `COOKIE_SECURE=false`.
 3. Optionnel : `OIDC_ALLOWED_DOMAINS=client.fr`, `OIDC_ADMIN_GROUPS=<id du groupe admin>`
    (Entra ID : activez la revendication `groups` dans le jeton).
 4. `docker compose up -d api` puis testez. Une fois validé : `LOCAL_LOGIN_ENABLED=false`.
+5. Droits par groupe : dans *Administration › Accès*, ouvrez une collection à un groupe de
+   l'annuaire (nom transmis dans la revendication `OIDC_GROUPS_CLAIM`, `groups` par défaut ;
+   Entra ID transmet l'identifiant du groupe). Les membres la trouvent à leur prochaine connexion.
+
+Pour essayer le SSO sans annuaire : un Keycloak local avec des comptes de démonstration est
+fourni (`deploy/keycloak/README.md`).
 
 Exemples d'émetteur : Entra ID `https://login.microsoftonline.com/<tenant>/v2.0`, Google
 `https://accounts.google.com`, Keycloak `https://sso.client.fr/realms/<realm>`.
@@ -88,6 +94,61 @@ docker compose exec postgres psql -U contexthub -c "DROP INDEX ix_hub_chunks_emb
   CREATE INDEX ix_hub_chunks_embedding ON hub_chunks USING hnsw (embedding vector_cosine_ops);"
 docker compose exec api entrypoint.sh cli reindex
 ```
+
+### Passerelle LLM
+
+Pour suivre les coûts, fixer des budgets par utilisateur ou limiter le débit, placez une
+passerelle compatible OpenAI devant les modèles (référence : LiteLLM, édition open source).
+ContextHub lui envoie alors tous les appels de modèle et affiche la consommation qu'il y lit
+(*Ma consommation*, *Administration › Consommation*) ; il n'en stocke rien.
+
+```ini
+LLM_GATEWAY_URL=http://litellm.interne:4000     # racine de la passerelle, sans /v1
+LLM_GATEWAY_API_KEY=sk-…                        # clé applicative : appels de modèle, liste des modèles
+LLM_GATEWAY_ADMIN_KEY=sk-…                      # facultatif : consommation et budgets (clé d'administrateur LiteLLM)
+LLM_GATEWAY_LABEL=Passerelle IA du groupe       # libellé affiché aux utilisateurs
+LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : modèles proposés tant que l'administration n'en a pas choisi
+# LLM_GATEWAY_CONSOLE_URL=https://litellm.interne/ui   # facultatif : lien vers la console depuis Administration › Modèles
+```
+
+- Les identifiants de modèle deviennent `gateway:<nom servi par la passerelle>`. La passerelle
+  est la source de vérité du catalogue (la portée de la clé applicative fait office de liste
+  blanche) ; les entrées `gateway:` de `LLM_MODELS` le restreignent. Sans entrée `gateway:`,
+  tous les modèles servis sont proposés, `LLM_MODEL_NAME` en tête. Les entrées d'autres
+  fournisseurs sont ignorées (avertissement dans *Administration › Système*). Les embeddings
+  ne passent pas par la passerelle.
+- `LLM_GATEWAY_ADMIN_KEY` n'a pas de repli sur `LLM_GATEWAY_API_KEY` (moindre privilège) : sans
+  elle, le chat fonctionne et les pages de consommation indiquent que le suivi n'est pas
+  configuré.
+- Sur `/chat/ask`, un refus de la passerelle porte l'en-tête `X-ContextHub-Error-Code`
+  (`budget_exceeded`, `rate_limited`, `unreachable`, `unavailable`, `rejected`) : un client
+  d'API distingue ainsi un 429 de la passerelle de la limitation de débit de ContextHub.
+- La passerelle doit être joignable depuis le service `api` (réseau Docker ou réseau interne) ;
+  `/admin/system` vérifie sa disponibilité (*Administration › Système*).
+- Côté LiteLLM : base PostgreSQL dédiée (obligatoire pour le suivi des dépenses), suivi par
+  client final actif, prompts non conservés (`store_prompts_in_spend_logs: false`).
+- Modèles proposés (ADR-002) : l'administrateur les choisit, avec le modèle par défaut, dans
+  *Administration › Modèles* (`/admin/models`) parmi les modèles servis par la passerelle
+  (sans passerelle : parmi `LLM_MODELS`, dont les clés de fournisseur sont configurées). Ce
+  réglage est stocké dans `hub_settings` et prime sur `LLM_MODELS` ; le supprimer rétablit le
+  comportement d'environnement. Avec plusieurs workers d'API, un changement s'applique
+  partout en 5 secondes au plus. Migration `69ab4256` requise (`alembic upgrade head`) : sans
+  elle, le chat garde les valeurs d'environnement et *Administration › Système* affiche
+  « Migration manquante » sur le contrôle de la base.
+- Budgets par utilisateur (ADR-002) : fixés depuis l'administration (`/admin/users/{id}/budget`,
+  jour, semaine ou 30 jours), écrits à la passerelle avec `LLM_GATEWAY_ADMIN_KEY`, qui doit être
+  une clé d'administrateur complète (la suppression d'un budget est réservée au rôle
+  `proxy_admin`). ContextHub crée pour chaque utilisateur un budget dédié `contexthub-<uuid>`
+  rattaché au client final `<uuid>` ; il ne modifie jamais un budget défini dans la console
+  (budget partagé, palier) : fixer un budget remplace le rattachement, retirer un budget de la
+  console est refusé (à faire dans la console). Retirer le budget ContextHub ramène
+  l'utilisateur au budget par défaut de la passerelle (`max_end_user_budget_id`) s'il en existe
+  un. ContextHub ne stocke aucun budget.
+- `LLM_GATEWAY_IS_LOCAL=true` seulement si tous les modèles servis restent dans votre réseau :
+  sinon le chat signale que des extraits sont envoyés hors de l'infrastructure.
+
+Une passerelle de développement prête à l'emploi (profil compose `gateway`) et la procédure de
+vérification de bout en bout sont décrites dans `deploy/litellm/README.md`.
 
 ## 6. Exploitation courante
 

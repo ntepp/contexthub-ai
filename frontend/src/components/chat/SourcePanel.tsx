@@ -11,6 +11,12 @@ interface Props {
   onClose: () => void
 }
 
+const KIND_LABELS: Record<string, string> = { confluence: 'Confluence', notion: 'Notion' }
+
+function kindLabel(source: Source): string {
+  return KIND_LABELS[source.source_kind ?? ''] ?? 'la source externe'
+}
+
 export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
   const [viewing, setViewing] = useState<Source | null>(null)
   const refs = useRef<Record<number, HTMLElement | null>>({})
@@ -54,7 +60,7 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
                   {s.doc_title ?? s.filename}
                 </p>
                 <p className="truncate text-xs text-slate" title={s.filename}>
-                  {s.page ? `Page ${s.page}` : 'Document sans pagination'}
+                  {s.url ? kindLabel(s) : s.page ? `Page ${s.page}` : 'Document sans pagination'}
                   {s.doc_title && `, ${s.filename}`}
                   {!s.cited && ', consultée mais non citée'}
                 </p>
@@ -66,16 +72,29 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
             <blockquote className="mt-2 line-clamp-6 border-l-2 border-ledger/40 pl-3 font-serif text-sm leading-relaxed text-ink">
               {s.snippet}
             </blockquote>
-            <button
-              className="btn-ghost mt-2 -ml-2 px-2 py-1 text-xs"
-              onClick={(e) => {
-                e.stopPropagation()
-                setViewing(s)
-              }}
-            >
-              <FileText size={14} />
-              {s.page ? `Ouvrir à la page ${s.page}` : 'Ouvrir le document'}
-            </button>
+            {s.url ? (
+              <a
+                className="btn-ghost mt-2 -ml-2 px-2 py-1 text-xs"
+                href={s.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink size={14} />
+                Ouvrir dans {kindLabel(s)}
+              </a>
+            ) : (
+              <button
+                className="btn-ghost mt-2 -ml-2 px-2 py-1 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setViewing(s)
+                }}
+              >
+                <FileText size={14} />
+                {s.page ? `Ouvrir à la page ${s.page}` : 'Ouvrir le document'}
+              </button>
+            )}
           </li>
         ))}
       </ol>
