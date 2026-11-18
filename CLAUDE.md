@@ -20,6 +20,7 @@ cd frontend && npm run dev                 # UI (http://localhost:5173, /api pro
 alembic upgrade head
 python -m src.cli create-admin|verify-audit|purge|reindex
 python -m eval.run_eval --collection mifid [--ingest DIR]   # quality benchmark (real LLM + corpus)
+python -m eval.tools.make_scanned_corpus && python -m eval.tools.measure_ocr --lang fra+eng   # scanned set (ADR-003)
 
 ruff check src eval tests
 pytest                                     # SQLite + fakes, no external service
@@ -54,7 +55,7 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
 | `src/ocr/` | ADR-003. `base` (`OcrEngine` protocol, `OcrError`), `tesseract` (default local adapter, every failure mapped to `OcrError`), `registry` (`get_ocr_engine()`, test override, `engine_check()` for `/admin/system`), `preprocess` (grayscale, upscale, deskew, blank page; Pillow only), `reader` (`read_page`: orientation, confidence) |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (default queue, backoff on transient errors only; hands documents with pages to OCR to `ocr_document`, routed to queue `ocr`) + `ocr_worker` launcher + nightly `purge_expired` |
-| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
+| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`, `golden_rh_scans.json` on a generated, unversioned `eval/corpora/rh_scans`), metrics, reporter, runner, `tools/fetch_service_public.py`, `tools/make_scanned_corpus.py`, `tools/measure_ocr.py` |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
 
 ## Invariants — do not break

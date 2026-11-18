@@ -1,0 +1,200 @@
+{
+  "metadata": {
+    "corpus": "Documents numérisés générés à partir de 5 fiches Service-Public.fr (DILA) de eval/corpora/rh, licence Etalab 2.0 : TIFF multipage tourné de 90° à 200 dpi, PDF image retourné à 180° avec inclinaison de 1,5°, taches et flou, PDF mixte (pages paires numérisées), photo JPEG à 100 dpi (page 1), PNG incliné de 2,5° à 150 dpi (page 1)",
+    "collection": "rh_scans",
+    "corpus_dir": "eval/corpora/rh_scans",
+    "generator": "python -m eval.tools.make_scanned_corpus",
+    "expected_documents": [
+      "F2278-conge-deces-scan.tiff",
+      "F2883-demission-scan.pdf",
+      "F2405-jours-feries-mixte.pdf",
+      "F13851-teletravail-photo.jpg",
+      "F1643-periode-essai-page1.png"
+    ],
+    "version": "1.0",
+    "created": "2026-11-18",
+    "notes": "Jeu « documents numérisés » (ADR-003). Le corpus n'est pas versionné : générez-le d'abord (python -m eval.tools.make_scanned_corpus), puis python -m eval.run_eval --dataset eval/datasets/golden_rh_scans.json --collection rh_scans (l'indexation en processus lit les pages par OCR). Réponses vérifiées dans le texte rendu (manifest.json du corpus, champ pages[].text). reference_article vaut null : le texte lu par OCR n'a pas de titres Markdown, la métrique « bonne section » ne s'applique pas. Les pièges SC19 et SC20 ont leur réponse dans la fiche complète mais pas dans la page numérisée retenue (F1643 et F13851 : page 1 seulement) : seul le refus est correct. Représentatif seulement avec la langue Tesseract fra installée."
+  },
+  "questions": [
+    {
+      "id": "SC01",
+      "category": "factual_simple",
+      "question": "Combien de jours de congé un salarié obtient-il pour le décès de son père ?",
+      "ground_truth": "Le salarié a droit à 3 jours de congé pour le décès de son père (comme pour sa mère, son beau-père ou sa belle-mère), ou à une durée plus élevée si elle est prévue par convention collective ou accord collectif d'entreprise.",
+      "source_document": "F2278-conge-deces-scan.tiff",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC02",
+      "category": "reasoning_conditional",
+      "question": "Quels congés un salarié peut-il prendre au décès de son enfant de 10 ans ?",
+      "ground_truth": "Pour le décès d'un enfant de moins de 25 ans, le salarié a droit à un congé de 14 jours ouvrables, auquel s'ajoute un congé de deuil de 8 jours. Le congé de deuil peut être fractionné (2 périodes au maximum pour un salarié, d'au moins 1 jour chacune) et doit être pris dans un délai d'1 an à compter du décès.",
+      "source_document": "F2278-conge-deces-scan.tiff",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC03",
+      "category": "factual_simple",
+      "question": "Un stagiaire peut-il obtenir un congé pour le décès d'un membre de sa famille ?",
+      "ground_truth": "Non. Un stagiaire n'a pas de contrat de travail : il n'est pas salarié de l'entreprise et ne peut pas obtenir ce congé. En revanche, un apprenti est salarié et peut l'obtenir, sans condition d'ancienneté.",
+      "source_document": "F2278-conge-deces-scan.tiff",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC04",
+      "category": "factual_simple",
+      "question": "Quel justificatif le salarié doit-il remettre à son employeur pour un congé pour décès ?",
+      "ground_truth": "Il doit remettre un justificatif, l'acte de décès, à son employeur.",
+      "source_document": "F2278-conge-deces-scan.tiff",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC05",
+      "category": "factual_simple",
+      "question": "Un salarié peut-il démissionner oralement ?",
+      "ground_truth": "Oui. Le salarié peut informer son employeur ou son supérieur hiérarchique oralement ou par écrit. Pour éviter tout litige, il est préférable de le faire par écrit (lettre recommandée avec avis de réception ou remise en mains propres contre décharge). L'employeur ne peut pas refuser la démission.",
+      "source_document": "F2883-demission-scan.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC06",
+      "category": "reasoning_conditional",
+      "question": "Quel préavis doit respecter un salarié payé au mois qui démissionne d'un emploi situé en Moselle ?",
+      "ground_truth": "En Moselle, dans le Bas-Rhin et le Haut-Rhin, le préavis de démission est de 15 jours lorsque la rémunération est fixée par mois (6 semaines pour les cadres, techniciens, agents de maîtrise, commis commerciaux, professeurs et personnes employées par des particuliers ; 1 semaine pour une rémunération à la semaine ; 1 jour pour une rémunération à la journée).",
+      "source_document": "F2883-demission-scan.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC07",
+      "category": "factual_simple",
+      "question": "Un salarié qui démissionne a-t-il droit aux allocations chômage ?",
+      "ground_truth": "En principe non : la démission ne donne pas droit à une indemnisation au titre de l'assurance chômage. Dans certains cas, France Travail peut toutefois considérer la démission comme légitime.",
+      "source_document": "F2883-demission-scan.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC08",
+      "category": "reasoning_conditional",
+      "question": "Si l'employeur dispense de sa seule initiative le salarié démissionnaire d'effectuer son préavis, doit-il lui verser une indemnité ?",
+      "ground_truth": "Oui. Lorsque le salarié est dispensé de préavis à la seule initiative de l'employeur, il a droit à une indemnité compensatrice de préavis. Si c'est le salarié qui demande à ne pas effectuer son préavis et que l'employeur l'accepte, l'indemnité n'est pas due.",
+      "source_document": "F2883-demission-scan.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC09",
+      "category": "factual_simple",
+      "question": "Quelle est la date du lundi de Pentecôte en 2026 ?",
+      "ground_truth": "Le lundi de Pentecôte tombe le lundi 25 mai 2026.",
+      "source_document": "F2405-jours-feries-mixte.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC10",
+      "category": "factual_simple",
+      "question": "À quelle date le jour férié de commémoration de l'abolition de l'esclavage a-t-il lieu en Martinique ?",
+      "ground_truth": "En Martinique, le jour de la commémoration de l'abolition de l'esclavage, férié, est le 22 mai.",
+      "source_document": "F2405-jours-feries-mixte.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC11",
+      "category": "factual_simple",
+      "question": "Quel jour férié est obligatoirement chômé pour tous les salariés ?",
+      "ground_truth": "Parmi les fêtes légales, seul le 1er mai est obligatoirement chômé pour tous les salariés, sauf dans les entreprises qui, en raison de la nature de leur activité, ne peuvent pas interrompre le travail (hôpitaux, transports publics par exemple).",
+      "source_document": "F2405-jours-feries-mixte.pdf",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC12",
+      "category": "factual_simple",
+      "question": "En l'absence d'accord collectif ou de charte, comment l'employeur et le salarié peuvent-ils mettre en place le télétravail ?",
+      "ground_truth": "Ils peuvent convenir à tout moment de recourir au télétravail et formalisent leur accord par tout moyen, par exemple une clause du contrat de travail ou un avenant. Pour éviter les litiges, il est préférable que cet accord soit écrit.",
+      "source_document": "F13851-teletravail-photo.jpg",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC13",
+      "category": "reasoning_conditional",
+      "question": "L'employeur peut-il imposer le télétravail sans l'accord du salarié ?",
+      "ground_truth": "Oui, en cas de circonstances exceptionnelles (menace d'épidémie par exemple) ou de force majeure. Sinon, le salarié doit être volontaire.",
+      "source_document": "F13851-teletravail-photo.jpg",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC14",
+      "category": "factual_simple",
+      "question": "Quelle est la durée maximale légale de la période d'essai initiale d'un employé ou d'un ouvrier en CDI ?",
+      "ground_truth": "La durée maximale légale de la période d'essai initiale d'un employé ou d'un ouvrier en CDI est de 2 mois ; une convention collective ou le contrat peut prévoir une durée plus courte. Elle est renouvelable une fois, soit 4 mois au maximum sous conditions.",
+      "source_document": "F1643-periode-essai-page1.png",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC15",
+      "category": "reasoning_conditional",
+      "question": "Une période d'essai de 2 mois commence un 13 mars : quand se termine-t-elle ?",
+      "ground_truth": "Elle prend fin le 12 mai suivant à minuit, même si ce jour tombe un dimanche ou un jour férié : la période d'essai se décompte de manière calendaire à partir du 1er jour de travail.",
+      "source_document": "F1643-periode-essai-page1.png",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC16",
+      "category": "factual_simple",
+      "question": "La période d'essai est-elle obligatoire pour un salarié en CDI ?",
+      "ground_truth": "Non, la période d'essai n'est pas obligatoire. Le salarié doit cependant l'effectuer si elle est prévue dans son contrat de travail ou sa lettre d'engagement.",
+      "source_document": "F1643-periode-essai-page1.png",
+      "reference_article": null,
+      "answerable": true
+    },
+    {
+      "id": "SC17",
+      "category": "unanswerable_trap",
+      "question": "Combien de jours de congé un salarié obtient-il pour son mariage ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "SC18",
+      "category": "unanswerable_trap",
+      "question": "Quel est le montant du SMIC horaire brut en 2026 ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "SC19",
+      "category": "unanswerable_trap",
+      "question": "La période d'essai d'un CDD peut-elle être renouvelée ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    },
+    {
+      "id": "SC20",
+      "category": "unanswerable_trap",
+      "question": "Un salarié en télétravail a-t-il droit aux titres-restaurant ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false
+    }
+  ]
+}

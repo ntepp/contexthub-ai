@@ -93,8 +93,8 @@ que le produit leur soit réservé.
 #### Base documentaire (DOC)
 | ID | Exigence | Priorité |
 |---|---|---|
-| DOC-1 | Import PDF, DOCX, TXT, Markdown, HTML ; ingestion asynchrone avec progression | Must |
-| DOC-2 | OCR des pages sans couche texte (Tesseract, français + anglais) | Should |
+| DOC-1 | Import PDF, DOCX, TXT, Markdown, HTML, images JPG / PNG / TIFF multipage ; ingestion asynchrone avec progression | Must |
+| DOC-2 | Documents numérisés (ADR-003) : OCR local (Tesseract, français + anglais) des images et des pages de PDF sans couche texte exploitable, page par page ; orientation, redressement et mise à l'échelle ; confiance mesurée par page, pages mal lues signalées (API et interface) ; file de traitement dédiée qui ne retarde pas les documents texte ; relance de l'OCR par un éditeur | Should |
 | DOC-3 | Déduplication par empreinte SHA-256 au sein d'une collection | Must |
 | DOC-4 | Découpage tenant compte de la structure : titres Word et Markdown, Titre / Chapitre / Section / Article | Must |
 | DOC-10 | Reconnaissance des actes européens et de leur nom d'usage, transverses (RGPD, AI Act, NIS 2…) et sectoriels (MiFID II, DORA…) | Should |
@@ -239,6 +239,27 @@ bge-m3), détail et méthode dans [evaluation.md](evaluation.md) :
 Le score de pertinence des sources ne sépare pas les réponses justes des fausses : il n'est pas
 affiché aux utilisateurs (décision issue de la mesure).
 
+### Documents numérisés (ADR-003, 2026-11-18)
+
+Corpus généré (`python -m eval.tools.make_scanned_corpus`, 5 fiches RH, 16 pages numérisées :
+TIFF tourné de 90° à 200 dpi, PDF image retourné à 180° et incliné de 1,5° avec taches et flou,
+PDF mixte, photo JPEG à 100 dpi, PNG incliné de 2,5° à 150 dpi), mesuré par
+`python -m eval.tools.measure_ocr --lang eng` (Tesseract 4.1.1, **anglais seulement** : `fra`
+n'était pas installé). Part des caractères de référence retrouvés, accents ignorés :
+
+| | Avec prétraitement | Sans prétraitement |
+|---|---|---|
+| Ensemble (16 pages) | 99,3 % (98,6 % avec accents), confiance 90,4 | 53,2 %, confiance 66,3 |
+| PDF retourné et incliné (8 pages) | 99,3 % | 9,0 % |
+| TIFF tourné de 90° (3 pages) | 99,5 % | 94,7 % |
+| JPEG 100 dpi, PNG incliné, PDF mixte | 98,1 à 99,8 % | 98,3 à 99,4 % |
+
+Lecture : le gain vient surtout de l'orientation (pages retournées) ; sur les pages droites,
+Tesseract seul lit déjà bien ce texte de synthèse (police nette, sans fond), plus facile que de
+vrais scans. Les pages à couche texte du PDF mixte sont lues à 100 % sans OCR. **Non mesuré** :
+la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_scans` avec un LLM
+(`eval.run_eval`), de vrais documents numérisés.
+
 ## 11. Suivi d'implémentation
 
 | Domaine | Statut | Détail |
@@ -250,7 +271,8 @@ affiché aux utilisateurs (décision issue de la mesure).
 | AUTH-1 à AUTH-8 | ✅ | Comptes, SSO OIDC + PKCE, rôles, droits par collection, cookie strict + CSRF, clés d'API, limitation de débit, admin initial |
 | DOC-11 Découpage des définitions | ✅ | `definition_items()` dans `src/ingestion/chunking.py` : listes numérotées (« 8) «terme», … ») et à puces (« - **Terme** : … »), sous-points rattachés ; `CHUNK_DEFINITIONS` ; documents existants : `cli reindex` |
 | DOC-12 Connecteurs à chaud | ✅ | `src/connectors/` (Confluence REST v1 + CQL, Notion API), connexions gérées par l'administrateur (jeton chiffré, jamais renvoyé), pages jointes dans une « collection de session » privée à la conversation (`hub_collections.conversation_id`), périmètre « Pages jointes uniquement », citations ouvrant la page d'origine, journal d'audit (`connection.*`, `source.attach`, `source.detach`) ; test e2e avec un faux Confluence (`tests/e2e/mock_confluence.py`) |
-| DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML, OCR Tesseract, dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
+| DOC-2 Documents numérisés (ADR-003, lot 3) | 🟡 | **Implémenté et testé (moteur simulé + Tesseract 4.1 réel en anglais) ; qualité en français non mesurée (langue `fra` absente du poste de développement), interface non vérifiée visuellement.** `src/ocr/` (port `OcrEngine`, adaptateur Tesseract local, prétraitement Pillow : orientation OSD vérifiée par une seconde lecture si incertaine, agrandissement, redressement ±5°, pages blanches), import JPG/PNG/TIFF (signature binaire, une page citée par image TIFF, aperçu PNG `GET /documents/{id}/pages/{n}`), OCR page par page des PDF mixtes (`OCR_MIN_PAGE_CHARS`), qualité stockée (`read_mode`, `ocr_pages`, `ocr_confidence`, `ocr_low_pages`, migration `69ab4257`), file Celery `ocr` et worker dédié (`python -m src.workers.ocr_worker`, service `worker-ocr`), relance `POST /documents/{id}/ocr` (éditeur, audit `document.ocr`), contrôle « OCR » dans *Administration › Système* ; jeu `eval/datasets/golden_rh_scans.json` (20 questions dont 4 pièges) et mesures en §10 |
+| DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML (+ images, voir DOC-2), dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
 | QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
 | QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
 | QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
@@ -293,3 +315,4 @@ Une évolution = une branche `feature/<nom>` issue de `master`, une pull request
 | Jeu de référence RH (EVAL-4) | `feature/hr-golden-dataset` | ✅ Livrée — mesures en §10 |
 | Connecteurs à chaud Confluence et Notion (DOC-12) | `feature/document-connectors` | ✅ Livrée — pages jointes à la conversation, sans synchronisation |
 | Droits par groupe SSO et Keycloak de développement (AUTH-9) | `feature/keycloak-dev-sso` | ✅ Livrée |
+| Documents numérisés, OCR de bout en bout (DOC-2, ADR-003, lot 3) | `feature/ocr` | 🟡 En revue — qualité en français à mesurer |
