@@ -25,6 +25,7 @@ pytest                                     # SQLite + fakes, no external service
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/contexthub_test pytest   # + real pgvector tests
 python -m tests.e2e.mock_confluence        # stand-in Confluence for demos and the connector e2e test (token "e2e-token")
 docker compose -f docker-compose.dev.yaml --profile sso up -d   # local Keycloak with demo accounts (deploy/keycloak/README.md); E2E_SSO=1 runs its e2e test
+docker compose -f docker-compose.dev.yaml --profile gateway up -d   # local LiteLLM gateway: costs, budgets, consumption pages (deploy/litellm/README.md)
 E2E_BASE_URL=http://localhost:5173 E2E_EMAIL=... E2E_PASSWORD=... pytest -m e2e   # UI scenario (Playwright + Chrome, running stack)
 cd frontend && npm run build               # tsc strict + vite
 
@@ -48,9 +49,10 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |
+| `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (backoff on transient errors only) + nightly `purge_expired` |
 | `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
-| `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, pages: Chat, KnowledgeBase, Account, admin/* |
+| `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
 
 ## Invariants — do not break
 

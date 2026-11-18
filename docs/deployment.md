@@ -95,6 +95,45 @@ docker compose exec postgres psql -U contexthub -c "DROP INDEX ix_hub_chunks_emb
 docker compose exec api entrypoint.sh cli reindex
 ```
 
+### Passerelle LLM
+
+Pour suivre les coûts, fixer des budgets par utilisateur ou limiter le débit, placez une
+passerelle compatible OpenAI devant les modèles (référence : LiteLLM, édition open source).
+ContextHub lui envoie alors tous les appels de modèle et affiche la consommation qu'il y lit
+(*Ma consommation*, *Administration › Consommation*) ; il n'en stocke rien.
+
+```ini
+LLM_GATEWAY_URL=http://litellm.interne:4000     # racine de la passerelle, sans /v1
+LLM_GATEWAY_API_KEY=sk-…                        # clé applicative : appels de modèle, liste des modèles
+LLM_GATEWAY_ADMIN_KEY=sk-…                      # facultatif : lecture de la consommation (clé d'administrateur LiteLLM)
+LLM_GATEWAY_LABEL=Passerelle IA du groupe       # libellé affiché aux utilisateurs
+LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : restreint les modèles proposés
+```
+
+- Les identifiants de modèle deviennent `gateway:<nom servi par la passerelle>`. La passerelle
+  est la source de vérité du catalogue (la portée de la clé applicative fait office de liste
+  blanche) ; les entrées `gateway:` de `LLM_MODELS` le restreignent. Sans entrée `gateway:`,
+  tous les modèles servis sont proposés, `LLM_MODEL_NAME` en tête. Les entrées d'autres
+  fournisseurs sont ignorées (avertissement dans *Administration › Système*). Les embeddings
+  ne passent pas par la passerelle.
+- `LLM_GATEWAY_ADMIN_KEY` n'a pas de repli sur `LLM_GATEWAY_API_KEY` (moindre privilège) : sans
+  elle, le chat fonctionne et les pages de consommation indiquent que le suivi n'est pas
+  configuré.
+- Sur `/chat/ask`, un refus de la passerelle porte l'en-tête `X-ContextHub-Error-Code`
+  (`budget_exceeded`, `rate_limited`, `unreachable`, `unavailable`, `rejected`) : un client
+  d'API distingue ainsi un 429 de la passerelle de la limitation de débit de ContextHub.
+- La passerelle doit être joignable depuis le service `api` (réseau Docker ou réseau interne) ;
+  `/admin/system` vérifie sa disponibilité (*Administration › Système*).
+- Côté LiteLLM : base PostgreSQL dédiée (obligatoire pour le suivi des dépenses), suivi par
+  client final actif, prompts non conservés (`store_prompts_in_spend_logs: false`). Le budget
+  d'un utilisateur se définit sur la passerelle, avec l'UUID de son compte ContextHub comme
+  identifiant de client (`/customer/new`).
+- `LLM_GATEWAY_IS_LOCAL=true` seulement si tous les modèles servis restent dans votre réseau :
+  sinon le chat signale que des extraits sont envoyés hors de l'infrastructure.
+
+Une passerelle de développement prête à l'emploi (profil compose `gateway`) et la procédure de
+vérification de bout en bout sont décrites dans `deploy/litellm/README.md`.
+
 ## 6. Exploitation courante
 
 | Tâche | Commande |

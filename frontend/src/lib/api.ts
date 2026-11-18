@@ -172,6 +172,8 @@ export interface ChatMessage {
   feedback?: number | null
   pending?: boolean
   error?: boolean
+  /** Client side only: why the LLM gateway refused to answer, when it did. */
+  code?: GatewayErrorCode
 }
 
 export interface ConversationSummary {
@@ -188,6 +190,19 @@ export interface Model {
   name: string
   is_local: boolean
   available: boolean
+}
+
+export interface ModelList {
+  models: Model[]
+  default: string
+}
+
+// The model list depends on the signed-in user's session only: one request, dropped when the
+// session ends (logout, expiry, another account).
+let modelsRequest: Promise<ModelList> | null = null
+
+export function forgetModels(): void {
+  modelsRequest = null
 }
 
 export interface ApiKey {
@@ -265,7 +280,17 @@ export const api = {
   documentFileUrl: (id: string, page?: number | null) => `/api/documents/${id}/file${page ? `#page=${page}` : ''}`,
 
   // chat
-  models: () => http.get<{ models: Model[]; default: string }>('/models').then((r) => r.data),
+  /** Loaded once per session and shared (sidebar, chat): see `forgetModels()`. */
+  models: (): Promise<ModelList> => {
+    if (!modelsRequest) {
+      modelsRequest = http.get<ModelList>('/models').then((r) => r.data)
+      // A failed call is not kept: the next caller tries again.
+      modelsRequest.catch(() => {
+        modelsRequest = null
+      })
+    }
+    return modelsRequest
+  },
   conversations: () => http.get<ConversationSummary[]>('/conversations').then((r) => r.data),
   conversation: (id: string) =>
     http
@@ -338,10 +363,21 @@ export const api = {
   system: () => http.get<SystemStatus>('/admin/system').then((r) => r.data),
 }
 
+export interface SystemCheck {
+  ok: boolean
+  error?: string
+  workers?: string[]
+  models?: string[]
+  /** Gateway only: whether consumption can be read (admin key configured). */
+  consumption?: boolean
+  /** Gateway only: configuration remarks in French, shown even when `ok` is true. */
+  notes?: string[]
+}
+
 export interface SystemStatus {
   version: string
   environment: string
-  checks: Record<string, { ok: boolean; error?: string; workers?: string[]; models?: string[] }>
+  checks: Record<string, SystemCheck>
   counts: Record<string, number>
   configuration: {
     models: Model[]
@@ -356,14 +392,113 @@ export interface SystemStatus {
   }
 }
 
+// ---------------------------------------------------------------- consumption (LLM gateway)
+
+// Costs live in the LLM gateway: the API reads them there for the signed-in user (or, for an
+// administrator, for everybody) and ContextHub stores none. Dates are inclusive "YYYY-MM-DD".
+
+export interface UsageTotals {
+  cost: number
+  input_tokens: number
+  output_tokens: number
+  requests: number
+}
+
+export interface ModelUsage extends UsageTotals {
+  model: string
+}
+
+export interface DailyUsage extends UsageTotals {
+  date: string
+}
+
+/** Counted by the gateway over its own budget window, which may differ from the period shown. */
+export interface UsageBudget {
+  limit: number | null
+  spent: number | null
+  remaining: number | null
+  /** As configured on the gateway, e.g. "30d". */
+  period: string | null
+  resets_at: string | null
+}
+
+/** Breakdowns the gateway may not provide; they are then empty and listed in `missing`. */
+export type UsageBreakdown = 'by_model' | 'daily' | 'budget' | 'by_user'
+
+export interface UsageReport {
+  available: true
+  gateway: string
+  period: { from: string; to: string }
+  currency: string
+  totals: UsageTotals
+  by_model: ModelUsage[]
+  daily: DailyUsage[]
+  budget: UsageBudget | null
+  missing: UsageBreakdown[]
+}
+
+export interface UserUsage extends UsageTotals {
+  /** ContextHub id; null when the gateway knows the caller under another kind of identifier. */
+  user_id: string | null
+  /** False for a deleted account or another application of the gateway: `label` is then neutral. */
+  known: boolean
+  email: string | null
+  full_name: string | null
+  label: string
+}
+
+/** Global report: there is no global budget, so `budget` is always null and never in `missing`. */
+export interface AdminUsageReport extends UsageReport {
+  budget: null
+  missing: Exclude<UsageBreakdown, 'budget'>[]
+  by_user: UserUsage[]
+}
+
+/**
+ * Consumption is not tracked: no gateway, or a gateway without the key that reads its
+ * spend. `reason` is written by the API for the caller (plain for a user, precise for an admin).
+ */
+export interface UsageUnavailable {
+  available: false
+  reason: string
+}
+
+export const usage = {
+  me: (from?: string, to?: string) =>
+    http.get<UsageReport | UsageUnavailable>('/usage/me', { params: { from, to } }).then((r) => r.data),
+  admin: (from?: string, to?: string) =>
+    http.get<AdminUsageReport | UsageUnavailable>('/admin/usage', { params: { from, to } }).then((r) => r.data),
+}
+
 // ---------------------------------------------------------------- streaming
+
+/** Why the LLM gateway refused a chat call (`src/llm/gateway.py`). */
+export type GatewayErrorCode = 'budget_exceeded' | 'rate_limited' | 'unreachable' | 'unavailable' | 'rejected'
 
 export type StreamEvent =
   | { type: 'meta'; conversation_id: string; model: string }
   | { type: 'token'; content: string }
   | ({ type: 'final' } & AnswerResult)
-  | { type: 'error'; message: string }
+  /** `code` and `status` are only present when the LLM gateway refused the call. */
+  | { type: 'error'; message: string; code?: GatewayErrorCode; status?: number }
   | { type: 'done' }
+
+/** A non-2xx answer outside axios (streaming), with the server's French message. */
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+/** HTTP 402 is only ever the gateway's "budget reached" refusal. */
+export function isBudgetExceeded(error: unknown): boolean {
+  if (error instanceof ApiError) return error.status === 402
+  return axios.isAxiosError(error) && error.response?.status === 402
+}
 
 export async function streamAsk(
   body: {
@@ -392,7 +527,7 @@ export async function streamAsk(
     } catch {
       /* not JSON */
     }
-    throw new Error(message)
+    throw new ApiError(message, resp.status)
   }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()

@@ -37,5 +37,54 @@ services:
     volumes:
       - ./deploy/keycloak/contexthub-realm.json:/opt/keycloak/data/import/contexthub-realm.json:ro
 
+  # Optional LLM gateway (LiteLLM) to try cost tracking, per-user budgets and the
+  # "Consommation" pages:
+  #   docker compose -f docker-compose.dev.yaml --profile gateway up -d
+  # See deploy/litellm/README.md. Development only: fixed master key, salt key and
+  # database password (marked "dev-only"); provider keys are read from the environment
+  # (or this folder's .env), never written here.
+  litellm-db:
+    image: postgres:16-alpine
+    profiles: ["gateway"]
+    # LiteLLM's own database (keys, budgets, spend logs), separate from ContextHub's. Not published.
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm-dev-only
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  litellm:
+    # Pinned release (https://github.com/BerriAI/litellm/releases/tag/v1.106.6): bump deliberately.
+    image: ghcr.io/berriai/litellm:v1.106.6
+    profiles: ["gateway"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm-dev-only@litellm-db:5432/litellm
+      # Proxy administrator key (also the admin UI password). Development value.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-contexthub-dev-only-master-key}
+      # Encrypts credentials stored in the database: never change it once data exists.
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-sk-contexthub-dev-only-salt-key}
+      # Provider keys: passed through from your shell or .env, empty when unset.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Ollama running on the host (start.bat / start.sh setup).
+      OLLAMA_API_BASE: ${LITELLM_OLLAMA_API_BASE:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux; built in on Docker Desktop
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./deploy/litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  litellm_db_data:

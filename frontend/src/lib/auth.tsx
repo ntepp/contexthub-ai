@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { api, type Me } from './api'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { api, forgetModels, type Me } from './api'
 
 interface AuthState {
   user: Me | null
@@ -13,34 +13,45 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null)
   const [loading, setLoading] = useState(true)
+  // Session-wide caches (the model list) are dropped when the account changes or the session ends.
+  const userId = useRef<string | null>(null)
+  const endSession = useCallback(() => {
+    userId.current = null
+    forgetModels()
+    setUser(null)
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
       const me = await api.me()
+      if (me.id !== userId.current) {
+        forgetModels()
+        userId.current = me.id
+      }
       setUser(me)
       return me
     } catch {
-      setUser(null)
+      endSession()
       return null
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [endSession])
 
   const logout = useCallback(async () => {
     try {
       await api.logout()
     } finally {
-      setUser(null)
+      endSession()
     }
-  }, [])
+  }, [endSession])
 
   useEffect(() => {
     refresh()
-    const onUnauthorized = () => setUser(null)
+    const onUnauthorized = () => endSession()
     window.addEventListener('contexthub:unauthorized', onUnauthorized)
     return () => window.removeEventListener('contexthub:unauthorized', onUnauthorized)
-  }, [refresh])
+  }, [refresh, endSession])
 
   return <AuthContext.Provider value={{ user, loading, refresh, logout }}>{children}</AuthContext.Provider>
 }

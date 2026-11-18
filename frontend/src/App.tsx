@@ -6,6 +6,7 @@ import { Account } from './pages/Account'
 import { Chat } from './pages/Chat'
 import { KnowledgeBase } from './pages/KnowledgeBase'
 import { Login } from './pages/Login'
+import { Usage } from './pages/Usage'
 
 // Administration is only for admins: keep it out of everybody else's initial bundle.
 const Admin = lazy(() => import('./pages/admin/Admin').then((m) => ({ default: m.Admin })))
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/c/:conversationId" element={<Chat />} />
           <Route path="/documents" element={<KnowledgeBase />} />
           <Route path="/compte" element={<Account />} />
+          <Route path="/consommation" element={<Usage />} />
           <Route
             path="/admin/*"
             element={

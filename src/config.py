@@ -11,6 +11,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -134,6 +135,24 @@ class Settings(BaseSettings):
     # (vLLM, LM Studio...) so the UI does not flag it as a cloud model.
     openai_compatible_is_local: bool = False
 
+    # ------------------------------------------------------------------ LLM gateway (ADR-001)
+    # When LLM_GATEWAY_URL is set, every chat call (condense, plan, generate) goes through
+    # this OpenAI-compatible gateway, whatever the selected model; provider keys are not
+    # needed. Costs, budgets and rate limits belong to the gateway: ContextHub stores none.
+    llm_gateway_url: str | None = None  # proxy root, e.g. http://litellm:4000
+    llm_gateway_kind: Literal["litellm"] = "litellm"
+    # Application key used for chat calls and for listing the served models.
+    llm_gateway_api_key: str | None = None
+    # Gateway administrator key, used only to read consumption (LiteLLM reserves the spend
+    # endpoints to admin keys). Optional, no fallback on LLM_GATEWAY_API_KEY (least
+    # privilege): without it the consumption pages say they are not configured.
+    llm_gateway_admin_key: str | None = None
+    llm_gateway_label: str = "Passerelle LLM"
+    # True when the gateway and the models it serves run inside the client's network.
+    llm_gateway_is_local: bool = False
+    llm_gateway_timeout_seconds: int = 10  # admin / catalogue calls; chat uses LLM_TIMEOUT_SECONDS
+    llm_gateway_models_ttl_seconds: int = 60
+
     # ------------------------------------------------------------------ retrieval
     retrieval_max_distance: float = 0.75
     retrieval_top_k: int = 8
@@ -163,6 +182,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
+        if self.llm_gateway_url:
+            parsed = urlparse(self.llm_gateway_url.strip())
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError("LLM_GATEWAY_URL must be an http(s) URL")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("LLM_GATEWAY_URL must not contain credentials or parameters")
         if self.environment == "production":
             problems = []
             if self.secret_key == _INSECURE_SECRET or len(self.secret_key) < 32:
@@ -173,6 +198,8 @@ class Settings(BaseSettings):
                 problems.append("REDIS_PASSWORD must not be a default value")
             if self.admin_password == "change-me":
                 problems.append("ADMIN_PASSWORD must not be a default value")
+            if self.llm_gateway_url and not self.llm_gateway_api_key:
+                problems.append("LLM_GATEWAY_API_KEY must be set when LLM_GATEWAY_URL is set")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
@@ -198,6 +225,16 @@ class Settings(BaseSettings):
         if self.cookie_secure is not None:
             return self.cookie_secure
         return self.environment == "production"
+
+    @property
+    def gateway_enabled(self) -> bool:
+        return bool(self.llm_gateway_url and self.llm_gateway_url.strip())
+
+    @property
+    def gateway_root(self) -> str:
+        """Gateway root URL, without trailing slash nor ``/v1`` (accepted for convenience)."""
+        root = (self.llm_gateway_url or "").strip().rstrip("/")
+        return root[:-3] if root.endswith("/v1") else root
 
     @property
     def oidc_enabled(self) -> bool:
