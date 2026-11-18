@@ -10,6 +10,7 @@ import {
   type ChatMessage,
   type Connection,
   type Model,
+  modelAvailability,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
@@ -231,11 +232,16 @@ export function Chat() {
                 onChange={(e) => setModel(e.target.value)}
                 disabled={streaming}
               >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id} disabled={!m.available}>
-                    {m.name} ({m.is_local ? 'local' : m.provider_label}){m.available ? '' : ', indisponible'}
-                  </option>
-                ))}
+                {models.map((m) => {
+                  // "unknown" (gateway unreachable) stays selectable: the answer will tell.
+                  const state = modelAvailability(m)
+                  return (
+                    <option key={m.id} value={m.id} disabled={state === 'unavailable'}>
+                      {m.name} ({m.is_local ? 'local' : m.provider_label})
+                      {state === 'unavailable' ? ', indisponible' : state === 'unknown' ? ', disponibilité non vérifiée' : ''}
+                    </option>
+                  )
+                })}
               </select>
             </label>
           )}

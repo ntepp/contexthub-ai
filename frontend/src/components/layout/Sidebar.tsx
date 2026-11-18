@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { BookOpen, ChartColumn, LogOut, MessageSquarePlus, Settings2, ShieldCheck, Trash2, UserRound } from 'lucide-react'
-import { api, type ConversationSummary } from '@/lib/api'
+import { api, MODELS_CHANGED, type ConversationSummary } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, relativeDay } from '@/lib/utils'
 
@@ -36,10 +36,15 @@ export function Sidebar() {
   const [gatewayMode, setGatewayMode] = useState(false)
 
   useEffect(() => {
-    api
-      .models()
-      .then((data) => setGatewayMode(data.models.some((m) => m.provider === 'gateway')))
-      .catch(() => {})
+    const load = () =>
+      api
+        .models()
+        .then((data) => setGatewayMode(data.models.some((m) => m.provider === 'gateway')))
+        .catch(() => {})
+    load()
+    // The administrator changed the offered models (Administration › Modèles).
+    window.addEventListener(MODELS_CHANGED, load)
+    return () => window.removeEventListener(MODELS_CHANGED, load)
   }, [])
 
   useEffect(() => {

@@ -141,6 +141,7 @@ def test_catalogue_reflects_the_gateway(gw, member):
         "name": "gpt-4o",
         "is_local": False,
         "available": True,
+        "availability": "available",
     }
 
 
@@ -163,9 +164,9 @@ def test_unreachable_gateway_marks_models_unavailable(gw, monkeypatch, member):
     resp = member.get("/models")
     assert resp.status_code == 200
     body = resp.json()
-    assert [(m["id"], m["available"]) for m in body["models"]] == [
-        ("gateway:gpt-4o", False),
-        ("gateway:claude-sonnet", False),
+    assert [(m["id"], m["available"], m["availability"]) for m in body["models"]] == [
+        ("gateway:gpt-4o", False, "unknown"),
+        ("gateway:claude-sonnet", False, "unknown"),
     ]
     assert body["default"] == "gateway:gpt-4o"
 
@@ -327,7 +328,15 @@ async def test_litellm_user_usage(gw):
     assert report.totals.as_dict() == {"cost": 1.0, "input_tokens": 200, "output_tokens": 40, "requests": 4}
     assert [d.as_dict()["date"] for d in report.daily] == ["2026-11-03"]
     assert report.by_model[0].model == "gpt-4o" and report.by_model[0].totals.requests == 4
-    assert report.budget.as_dict() == {"limit": 2.0, "spent": 0.75, "remaining": 1.25, "period": "30d", "resets_at": None}
+    assert report.budget.as_dict() == {
+        "limit": 2.0,
+        "spent": 0.75,
+        "remaining": 1.25,
+        "period": "30d",
+        "period_kind": "month",
+        "resets_at": None,
+        "managed": False,  # not linked to ContextHub's own budget id
+    }
     assert report.missing == []
 
 
@@ -477,6 +486,7 @@ def test_admin_usage_is_admin_only_and_names_users(gw, admin, member, member_use
         "input_tokens": 100,
         "output_tokens": 20,
         "requests": 2,
+        "budget": None,  # only read for ContextHub accounts
     }
     assert body["by_model"][0]["model"] == "gpt-4o"
     assert body["budget"] is None and body["missing"] == []  # no global budget, not "missing"
@@ -579,7 +589,7 @@ def test_admin_system_flags_missing_admin_key_and_ignored_models(gw, admin, monk
     assert check["ok"] is True and check["consumption"] is False  # chat still works
     assert len(check["notes"]) == 2
     assert "LLM_GATEWAY_ADMIN_KEY" in check["notes"][0] and "ollama:fake-model" in check["notes"][1]
-    assert check["workers"] == check["notes"]  # shown by the current System page
+    assert "workers" not in check  # the display shim of lot 1 is gone: the page reads `notes`
 
 
 def test_production_does_not_require_the_admin_key():

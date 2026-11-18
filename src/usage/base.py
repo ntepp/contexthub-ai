@@ -22,14 +22,31 @@ An empty list with zero totals means "no consumption", not "unknown".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from enum import StrEnum
 from typing import Protocol
+
+# Currency of every amount the gateway reports or enforces (LiteLLM: USD).
+GATEWAY_CURRENCY = "USD"
 
 
 class UsageError(Exception):
     """The gateway could not answer. The message is shown as is: French, no secret,
     no raw remote response."""
+
+
+class BudgetConflict(UsageError):
+    """The change would touch a budget ContextHub does not manage (set on the gateway)."""
+
+
+class BudgetPeriod(StrEnum):
+    """Budget windows ContextHub offers; adapters translate them to the gateway's format."""
+
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"  # 30 days, not a calendar month
 
 
 @dataclass
@@ -81,6 +98,11 @@ class Budget:
     spent: float | None
     period: str | None = None  # e.g. "30d", as configured on the gateway
     resets_at: str | None = None
+    # ``period`` in ContextHub's terms, None when the gateway window is another one.
+    period_kind: BudgetPeriod | None = None
+    # True when the budget is ContextHub's own (set from its administration, removable
+    # there); False for a budget defined on the gateway (console, shared budget).
+    managed: bool = False
 
     @property
     def remaining(self) -> float | None:
@@ -94,7 +116,9 @@ class Budget:
             "spent": None if self.spent is None else round(self.spent, 6),
             "remaining": self.remaining,
             "period": self.period,
+            "period_kind": self.period_kind.value if self.period_kind else None,
             "resets_at": self.resets_at,
+            "managed": self.managed,
         }
 
 
@@ -114,7 +138,7 @@ class UsageReport:
     budget: Budget | None = None
     # Breakdowns the gateway did not provide ("by_model", "daily", "budget", "by_user").
     missing: list[str] = field(default_factory=list)
-    currency: str = "USD"
+    currency: str = GATEWAY_CURRENCY
 
 
 @dataclass
@@ -131,4 +155,39 @@ class UsageProvider(Protocol):
 
     async def global_usage(self, start: date, end: date) -> GlobalUsageReport:
         """Consumption of every end user over [start, end], with the per-user breakdown."""
+        ...
+
+
+@dataclass
+class BudgetBatch:
+    """Budgets of several users: ``budgets[user_id]`` is the budget or None (no budget);
+    users whose budget could not be read are in ``failed``, not in ``budgets``."""
+
+    budgets: dict[str, Budget | None] = field(default_factory=dict)
+    failed: list[str] = field(default_factory=list)
+
+
+class BudgetManager(Protocol):
+    """Per-user budgets, held and enforced by the gateway (ADR-002): ContextHub stores none.
+
+    ``user_id`` is the ContextHub UUID, as sent to the gateway on every chat call.
+    """
+
+    kind: str
+    currency: str  # of ``limit`` and ``spent``, same as the usage reports
+
+    async def get_budget(self, user_id: str) -> Budget | None:
+        """The user's own budget, None when the gateway knows none."""
+        ...
+
+    async def get_budgets(self, user_ids: Sequence[str]) -> BudgetBatch:
+        """Budgets of several users; never raises for one user's failure."""
+        ...
+
+    async def set_budget(self, user_id: str, limit: float, period: BudgetPeriod) -> Budget:
+        """Create or replace the user's budget (``limit`` > 0, gateway currency)."""
+        ...
+
+    async def remove_budget(self, user_id: str) -> None:
+        """Remove the budget ContextHub set; BudgetConflict for a gateway-defined one."""
         ...

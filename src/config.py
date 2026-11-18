@@ -20,6 +20,9 @@ log = logging.getLogger("contexthub")
 
 _INSECURE_SECRET = "dev-insecure-secret-change-me"
 
+# LLM gateway products ContextHub has adapters for (consumption, budgets).
+SUPPORTED_GATEWAY_KINDS = ("litellm",)
+
 DEFAULT_NO_ANSWER = "L'information n'est pas disponible dans la base de connaissances actuelle."
 
 
@@ -140,7 +143,7 @@ class Settings(BaseSettings):
     # this OpenAI-compatible gateway, whatever the selected model; provider keys are not
     # needed. Costs, budgets and rate limits belong to the gateway: ContextHub stores none.
     llm_gateway_url: str | None = None  # proxy root, e.g. http://litellm:4000
-    llm_gateway_kind: Literal["litellm"] = "litellm"
+    llm_gateway_kind: str = "litellm"  # one of SUPPORTED_GATEWAY_KINDS, checked at startup
     # Application key used for chat calls and for listing the served models.
     llm_gateway_api_key: str | None = None
     # Gateway administrator key, used only to read consumption (LiteLLM reserves the spend
@@ -152,6 +155,10 @@ class Settings(BaseSettings):
     llm_gateway_is_local: bool = False
     llm_gateway_timeout_seconds: int = 10  # admin / catalogue calls; chat uses LLM_TIMEOUT_SECONDS
     llm_gateway_models_ttl_seconds: int = 60
+    # Address of the gateway's own console as the administrators' browser reaches it, linked
+    # from Administration › Modèles. Empty: derived (LiteLLM: <LLM_GATEWAY_URL>/ui) unless the
+    # gateway host is a bare service name (e.g. "litellm" in Docker), unreachable from a browser.
+    llm_gateway_console_url: str | None = None
 
     # ------------------------------------------------------------------ retrieval
     retrieval_max_distance: float = 0.75
@@ -182,12 +189,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
-        if self.llm_gateway_url:
-            parsed = urlparse(self.llm_gateway_url.strip())
+        self.llm_gateway_kind = (self.llm_gateway_kind or "").strip().lower()
+        if self.llm_gateway_kind not in SUPPORTED_GATEWAY_KINDS:
+            raise ValueError(
+                f"LLM_GATEWAY_KIND={self.llm_gateway_kind!r} is not supported "
+                f"(accepted values: {', '.join(SUPPORTED_GATEWAY_KINDS)})"
+            )
+        for name in ("llm_gateway_url", "llm_gateway_console_url"):
+            value = getattr(self, name)
+            if not value:
+                continue
+            parsed = urlparse(value.strip())
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                raise ValueError("LLM_GATEWAY_URL must be an http(s) URL")
+                raise ValueError(f"{name.upper()} must be an http(s) URL")
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise ValueError("LLM_GATEWAY_URL must not contain credentials or parameters")
+                raise ValueError(f"{name.upper()} must not contain credentials or parameters")
         if self.environment == "production":
             problems = []
             if self.secret_key == _INSECURE_SECRET or len(self.secret_key) < 32:
@@ -237,6 +253,18 @@ class Settings(BaseSettings):
         return root[:-3] if root.endswith("/v1") else root
 
     @property
+    def gateway_console_url(self) -> str | None:
+        """Link to the gateway console for administrators, or None when not safely known."""
+        if not self.gateway_enabled:
+            return None
+        if self.llm_gateway_console_url and self.llm_gateway_console_url.strip():
+            return self.llm_gateway_console_url.strip()
+        host = (urlparse(self.gateway_root).hostname or "").lower()
+        if self.llm_gateway_kind != "litellm" or not _browser_reachable(host):
+            return None
+        return f"{self.gateway_root}/ui"
+
+    @property
     def oidc_enabled(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_client_id)
 
@@ -252,6 +280,21 @@ class Settings(BaseSettings):
     @staticmethod
     def split_csv(value: str) -> list[str]:
         return [v.strip() for v in value.split(",") if v.strip()]
+
+
+# Hosts that only resolve inside a container network or a cluster, or are no address at all.
+_UNREACHABLE_HOSTS = ("0.0.0.0", "::", "host.docker.internal", "gateway.docker.internal")
+_UNREACHABLE_SUFFIXES = (".svc", ".svc.cluster.local", ".cluster.local")
+
+
+def _browser_reachable(host: str) -> bool:
+    """Whether a browser on the administrator's machine can plausibly open ``host``: not a
+    bare service name (``litellm`` in Docker Compose), not a cluster-internal name."""
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if host in _UNREACHABLE_HOSTS or host.endswith(_UNREACHABLE_SUFFIXES):
+        return False
+    return "." in host or ":" in host  # FQDN, IPv4 or IPv6 literal
 
 
 @lru_cache

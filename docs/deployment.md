@@ -105,9 +105,10 @@ ContextHub lui envoie alors tous les appels de modèle et affiche la consommatio
 ```ini
 LLM_GATEWAY_URL=http://litellm.interne:4000     # racine de la passerelle, sans /v1
 LLM_GATEWAY_API_KEY=sk-…                        # clé applicative : appels de modèle, liste des modèles
-LLM_GATEWAY_ADMIN_KEY=sk-…                      # facultatif : lecture de la consommation (clé d'administrateur LiteLLM)
+LLM_GATEWAY_ADMIN_KEY=sk-…                      # facultatif : consommation et budgets (clé d'administrateur LiteLLM)
 LLM_GATEWAY_LABEL=Passerelle IA du groupe       # libellé affiché aux utilisateurs
-LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : restreint les modèles proposés
+LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : modèles proposés tant que l'administration n'en a pas choisi
+# LLM_GATEWAY_CONSOLE_URL=https://litellm.interne/ui   # facultatif : lien vers la console depuis Administration › Modèles
 ```
 
 - Les identifiants de modèle deviennent `gateway:<nom servi par la passerelle>`. La passerelle
@@ -125,9 +126,24 @@ LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : restreint les mod
 - La passerelle doit être joignable depuis le service `api` (réseau Docker ou réseau interne) ;
   `/admin/system` vérifie sa disponibilité (*Administration › Système*).
 - Côté LiteLLM : base PostgreSQL dédiée (obligatoire pour le suivi des dépenses), suivi par
-  client final actif, prompts non conservés (`store_prompts_in_spend_logs: false`). Le budget
-  d'un utilisateur se définit sur la passerelle, avec l'UUID de son compte ContextHub comme
-  identifiant de client (`/customer/new`).
+  client final actif, prompts non conservés (`store_prompts_in_spend_logs: false`).
+- Modèles proposés (ADR-002) : l'administrateur les choisit, avec le modèle par défaut, dans
+  *Administration › Modèles* (`/admin/models`) parmi les modèles servis par la passerelle
+  (sans passerelle : parmi `LLM_MODELS`, dont les clés de fournisseur sont configurées). Ce
+  réglage est stocké dans `hub_settings` et prime sur `LLM_MODELS` ; le supprimer rétablit le
+  comportement d'environnement. Avec plusieurs workers d'API, un changement s'applique
+  partout en 5 secondes au plus. Migration `69ab4256` requise (`alembic upgrade head`) : sans
+  elle, le chat garde les valeurs d'environnement et *Administration › Système* affiche
+  « Migration manquante » sur le contrôle de la base.
+- Budgets par utilisateur (ADR-002) : fixés depuis l'administration (`/admin/users/{id}/budget`,
+  jour, semaine ou 30 jours), écrits à la passerelle avec `LLM_GATEWAY_ADMIN_KEY`, qui doit être
+  une clé d'administrateur complète (la suppression d'un budget est réservée au rôle
+  `proxy_admin`). ContextHub crée pour chaque utilisateur un budget dédié `contexthub-<uuid>`
+  rattaché au client final `<uuid>` ; il ne modifie jamais un budget défini dans la console
+  (budget partagé, palier) : fixer un budget remplace le rattachement, retirer un budget de la
+  console est refusé (à faire dans la console). Retirer le budget ContextHub ramène
+  l'utilisateur au budget par défaut de la passerelle (`max_end_user_budget_id`) s'il en existe
+  un. ContextHub ne stocke aucun budget.
 - `LLM_GATEWAY_IS_LOCAL=true` seulement si tous les modèles servis restent dans votre réseau :
   sinon le chat signale que des extraits sont envoyés hors de l'infrastructure.
 

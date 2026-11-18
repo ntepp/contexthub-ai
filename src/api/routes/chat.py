@@ -22,7 +22,17 @@ from src.connectors import session_sources
 from src.db.models import ACCESS_VIEWER, Collection, Conversation, Message, User, utcnow
 from src.db.session import SessionLocal, get_db
 from src.llm import gateway
-from src.llm.factory import LLMProvider, ModelNotAllowed, ModelSpec, default_model, model_catalogue, resolve_model
+from src.llm.factory import (
+    AVAILABILITY_AVAILABLE,
+    AVAILABILITY_UNAVAILABLE,
+    AVAILABILITY_UNKNOWN,
+    LLMProvider,
+    ModelNotAllowed,
+    ModelSpec,
+    model_catalogue,
+    model_offer,
+    resolve_model,
+)
 from src.rag.rag_pipeline import RAGResult, answer_question, stream_answer
 from src.utils.logging_config import get_logger
 
@@ -197,7 +207,7 @@ def _failure(prepared: PreparedAsk, exc: Exception, where: str) -> tuple[int, st
 
 
 async def _catalogue() -> list[ModelSpec]:
-    # In gateway mode the catalogue may call the gateway (blocking httpx): off the event loop.
+    # Blocking (offered-models setting in the database, gateway lookup): off the event loop.
     return await asyncio.to_thread(model_catalogue)
 
 
@@ -392,28 +402,38 @@ async def _ollama_available() -> set[str] | None:
         return None
 
 
+def _state(ok: bool | None) -> str:
+    return AVAILABILITY_UNKNOWN if ok is None else AVAILABILITY_AVAILABLE if ok else AVAILABILITY_UNAVAILABLE
+
+
 @router.get("/models")
 async def list_models(user: User = Depends(current_user)) -> dict:
+    """Offered models, in the administrator's order. ``availability``: ``available``,
+    ``unavailable`` (left the catalogue, not installed, no key…) or ``unknown`` (gateway or
+    Ollama unreachable); ``available`` is its boolean form (true only when available)."""
     settings = get_settings()
-    if settings.gateway_enabled:
-        # Blocking lookup (cached): kept off the event loop.
-        catalogue = await asyncio.to_thread(model_catalogue)
-        served = await asyncio.to_thread(gateway.served_models)
-        models = [dict(spec.as_dict(), available=served is not None and spec.name in served) for spec in catalogue]
-        return {"models": models, "default": catalogue[0].id}
-    installed = await _ollama_available()
+    # Blocking lookups (database setting, gateway catalogue; both cached): off the event loop.
+    offer = await asyncio.to_thread(model_offer)
+    served = await asyncio.to_thread(gateway.served_models) if settings.gateway_enabled else None
+    installed = None if settings.gateway_enabled else await _ollama_available()
     models = []
-    for spec in model_catalogue():
-        entry = spec.as_dict()
-        if spec.provider == LLMProvider.OLLAMA:
-            entry["available"] = installed is not None and (
-                spec.name in installed or f"{spec.name}:latest" in installed
-            )
+    for offered in offer.models:
+        spec = offered.spec
+        ok: bool | None
+        if offered.available is False:
+            ok = False
+        elif settings.gateway_enabled:
+            # Same answer as /admin/models: unknown while the gateway cannot be reached.
+            ok = spec.provider == LLMProvider.GATEWAY and (None if served is None else spec.name in served)
+        elif spec.provider == LLMProvider.OLLAMA:
+            ok = None if installed is None else (spec.name in installed or f"{spec.name}:latest" in installed)
         elif spec.provider == LLMProvider.OPENAI:
-            entry["available"] = bool(settings.openai_api_key)
+            ok = bool(settings.openai_api_key)
         elif spec.provider == LLMProvider.ANTHROPIC:
-            entry["available"] = bool(settings.anthropic_api_key)
+            ok = bool(settings.anthropic_api_key)
+        elif spec.provider == LLMProvider.OPENAI_COMPATIBLE:
+            ok = bool(settings.openai_compatible_base_url)
         else:
-            entry["available"] = bool(settings.openai_compatible_base_url)
-        models.append(entry)
-    return {"models": models, "default": default_model().id}
+            ok = False  # gateway:… entry while no gateway is configured
+        models.append({**spec.as_dict(), "available": ok is True, "availability": _state(ok)})
+    return {"models": models, "default": offer.default_id}

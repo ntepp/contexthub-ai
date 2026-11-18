@@ -47,7 +47,7 @@ def pg(migrated):
         conn.execute(
             text(
                 "TRUNCATE hub_audit_events, hub_messages, hub_conversations, hub_chunks, hub_documents, "
-                "hub_collection_grants, hub_api_keys, hub_collections, hub_connections, hub_users "
+                "hub_collection_grants, hub_api_keys, hub_collections, hub_connections, hub_settings, hub_users "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -81,7 +81,7 @@ def _admin_client(pg):
 def test_migration_created_v1_schema(pg):
     with pg.connect() as conn:
         tables = set(conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'")).scalars())
-        assert {"hub_users", "hub_chunks", "hub_audit_events", "hub_conversations", "hub_collection_grants"} <= tables
+        assert {"hub_users", "hub_chunks", "hub_audit_events", "hub_conversations", "hub_collection_grants", "hub_settings"} <= tables
         indexes = set(conn.execute(text("SELECT indexname FROM pg_indexes WHERE tablename='hub_chunks'")).scalars())
         assert {"ix_hub_chunks_embedding", "ix_hub_chunks_tsv"} <= indexes
 
@@ -163,3 +163,14 @@ def test_attached_pages_are_searched_then_cascade_with_the_conversation(pg):
         assert admin.get("/admin/audit/verify").json()["valid"] is True
     finally:
         registry.set_connector_factory_override(None)
+
+
+def test_instance_settings_round_trip_on_postgres(pg):
+    from src import instance_settings
+
+    instance_settings.reset_cache()
+    instance_settings.put("models", {"offered": ["ollama:fake-model"], "default": "ollama:fake-model"}, None)
+    instance_settings.reset_cache()
+    assert instance_settings.get("models") == {"offered": ["ollama:fake-model"], "default": "ollama:fake-model"}
+    instance_settings.delete("models")
+    assert instance_settings.get("models") is None

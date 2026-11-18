@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, UserPlus } from 'lucide-react'
+import { KeyRound, UserPlus, Wallet } from 'lucide-react'
 import { api, errorMessage, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { formatDateTime } from '@/lib/utils'
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
+import { BudgetDialog, type BudgetTarget } from '@/components/usage/BudgetDialog'
 import { Notice } from '@/components/ui/Notice'
 
 export function Users() {
@@ -14,10 +15,18 @@ export function Users() {
   const [secret, setSecret] = useState<{ email: string; password: string } | null>(null)
   const [toDelete, setToDelete] = useState<User | null>(null)
   const [deleted, setDeleted] = useState<string | null>(null)
+  // Budgets live in the LLM gateway: the action is only offered behind one (models "gateway:…",
+  // as in the sidebar); the dialog explains when budgets still cannot be managed.
+  const [gatewayMode, setGatewayMode] = useState(false)
+  const [budgetOf, setBudgetOf] = useState<BudgetTarget | null>(null)
 
   const load = () => api.users().then(setUsers).catch((e) => setError(errorMessage(e)))
   useEffect(() => {
     load()
+    api
+      .models()
+      .then((data) => setGatewayMode(data.models.some((m) => m.provider === 'gateway')))
+      .catch(() => {})
   }, [])
 
   const update = async (u: User, patch: Partial<Pick<User, 'role' | 'is_active'>>) => {
@@ -78,34 +87,50 @@ export function Users() {
               <td className="table-cell text-slate">{formatDateTime(u.last_login_at)}</td>
               <td className="table-cell">{u.is_active ? 'Actif' : 'Désactivé'}</td>
               <td className="table-cell">
-                {u.id !== me?.id && (
-                  <div className="flex justify-end gap-1">
-                    {u.auth_provider === 'local' && (
-                      <button
-                        className="btn-ghost px-2 py-1 text-xs"
-                        onClick={async () => {
-                          const r = await api.resetPassword(u.id)
-                          setSecret({ email: u.email, password: r.temporary_password })
-                        }}
-                        title="Générer un mot de passe temporaire"
-                      >
-                        <KeyRound size={14} />
-                        Réinitialiser
+                {/* Wraps on narrow screens (1024 px) rather than pushing the table off the page. */}
+                <div className="flex flex-wrap justify-end gap-1">
+                  {gatewayMode && (
+                    <button
+                      className="btn-ghost px-2 py-1 text-xs"
+                      onClick={() => setBudgetOf({ id: u.id, label: u.full_name || u.email })}
+                      aria-label={`Budget de ${u.full_name || u.email}`}
+                      title="Plafond de dépense appliqué par la passerelle LLM"
+                    >
+                      <Wallet size={14} />
+                      Budget
+                    </button>
+                  )}
+                  {u.id !== me?.id && (
+                    <>
+                      {u.auth_provider === 'local' && (
+                        <button
+                          className="btn-ghost px-2 py-1 text-xs"
+                          onClick={async () => {
+                            const r = await api.resetPassword(u.id)
+                            setSecret({ email: u.email, password: r.temporary_password })
+                          }}
+                          title="Générer un mot de passe temporaire"
+                        >
+                          <KeyRound size={14} />
+                          Réinitialiser
+                        </button>
+                      )}
+                      <button className="btn-ghost px-2 py-1 text-xs" onClick={() => update(u, { is_active: !u.is_active })}>
+                        {u.is_active ? 'Désactiver' : 'Réactiver'}
                       </button>
-                    )}
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => update(u, { is_active: !u.is_active })}>
-                      {u.is_active ? 'Désactiver' : 'Réactiver'}
-                    </button>
-                    <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(u)}>
-                      Supprimer
-                    </button>
-                  </div>
-                )}
+                      <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(u)}>
+                        Supprimer
+                      </button>
+                    </>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      <BudgetDialog target={budgetOf} onClose={() => setBudgetOf(null)} />
 
       <CreateUserDialog
         open={creating}

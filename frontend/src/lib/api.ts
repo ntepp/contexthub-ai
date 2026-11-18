@@ -183,18 +183,55 @@ export interface ConversationSummary {
   updated_at: string | null
 }
 
+/** "unknown": the gateway (or Ollama) could not be reached, nothing could be checked. */
+export type ModelAvailability = 'available' | 'unavailable' | 'unknown'
+
 export interface Model {
   id: string
   provider: string
   provider_label: string
   name: string
   is_local: boolean
+  /** Boolean form of `availability`: true only when available. */
   available: boolean
+  /** Absent from older answers and from the system page: see `modelAvailability()`. */
+  availability?: ModelAvailability
+}
+
+export function modelAvailability(model: Pick<Model, 'available' | 'availability'>): ModelAvailability {
+  return model.availability ?? (model.available ? 'available' : 'unavailable')
 }
 
 export interface ModelList {
   models: Model[]
   default: string
+}
+
+/** Administration › Modèles: one model of the catalogue, offered in the chat or not. */
+export interface AdminModel extends Model {
+  /** Offered in the chat selector (offered ones come first, in their order). */
+  offered: boolean
+  is_default: boolean
+}
+
+export interface AdminModels {
+  /** "settings": chosen in the administration; "environment": LLM_MODELS / gateway defaults. */
+  source: 'settings' | 'environment'
+  gateway: boolean
+  /** False when the LLM gateway cannot be reached: nothing can be changed. */
+  catalogue_available: boolean
+  default: string
+  /** Gateway mode only; null when the console address is not safely known. */
+  console_url?: string | null
+  models: AdminModel[]
+}
+
+/** Fired after the administrator changes the offered models (the chat list is reloaded). */
+export const MODELS_CHANGED = 'contexthub:models-changed'
+
+export function modelsChanged(): void {
+  forgetModels()
+  window.dispatchEvent(new Event(MODELS_CHANGED))
 }
 
 // The model list depends on the signed-in user's session only: one request, dropped when the
@@ -361,6 +398,19 @@ export const api = {
       .get<{ valid: boolean; checked: number; broken_at: number | null; reason: string | null }>('/admin/audit/verify')
       .then((r) => r.data),
   system: () => http.get<SystemStatus>('/admin/system').then((r) => r.data),
+
+  // offered models
+  adminModels: () => http.get<AdminModels>('/admin/models').then((r) => r.data),
+  setAdminModels: (body: { offered: string[]; default: string }) =>
+    http.put<AdminModels>('/admin/models', body).then((r) => r.data),
+  resetAdminModels: () => http.delete<AdminModels>('/admin/models').then((r) => r.data),
+
+  // per-user budgets (held by the LLM gateway)
+  userBudget: (userId: string) => http.get<UserBudgetState>(`/admin/users/${userId}/budget`).then((r) => r.data),
+  setUserBudget: (userId: string, body: { limit: number; period: BudgetPeriodKind }) =>
+    http.put<UserBudgetState>(`/admin/users/${userId}/budget`, body).then((r) => r.data),
+  removeUserBudget: (userId: string) =>
+    http.delete<UserBudgetState>(`/admin/users/${userId}/budget`).then((r) => r.data),
 }
 
 export interface SystemCheck {
@@ -412,6 +462,9 @@ export interface DailyUsage extends UsageTotals {
   date: string
 }
 
+/** Budget windows ContextHub offers; "month" is a sliding 30-day window, not a calendar month. */
+export type BudgetPeriodKind = 'day' | 'week' | 'month'
+
 /** Counted by the gateway over its own budget window, which may differ from the period shown. */
 export interface UsageBudget {
   limit: number | null
@@ -419,11 +472,23 @@ export interface UsageBudget {
   remaining: number | null
   /** As configured on the gateway, e.g. "30d". */
   period: string | null
+  /** `period` in ContextHub's terms; null when the gateway window is another one. */
+  period_kind: BudgetPeriodKind | null
   resets_at: string | null
+  /** True: set from ContextHub (removable here); false: defined in the gateway console. */
+  managed: boolean
 }
 
-/** Breakdowns the gateway may not provide; they are then empty and listed in `missing`. */
-export type UsageBreakdown = 'by_model' | 'daily' | 'budget' | 'by_user'
+/** GET/PUT/DELETE /admin/users/{id}/budget. */
+export type UserBudgetState =
+  | { available: true; user_id: string; budget: UsageBudget | null; currency: string }
+  | { available: false; reason: string }
+
+/**
+ * Breakdowns the gateway may not provide; they are then empty and listed in `missing`.
+ * "budgets" (administration only): per-user budgets were only partly read.
+ */
+export type UsageBreakdown = 'by_model' | 'daily' | 'budget' | 'by_user' | 'budgets'
 
 export interface UsageReport {
   available: true
@@ -445,6 +510,8 @@ export interface UserUsage extends UsageTotals {
   email: string | null
   full_name: string | null
   label: string
+  /** Known users only; null without a budget or when it could not be read (see `missing`). */
+  budget: UsageBudget | null
 }
 
 /** Global report: there is no global budget, so `budget` is always null and never in `missing`. */
@@ -452,6 +519,8 @@ export interface AdminUsageReport extends UsageReport {
   budget: null
   missing: Exclude<UsageBreakdown, 'budget'>[]
   by_user: UserUsage[]
+  /** False: budgets cannot be managed from ContextHub with this gateway configuration. */
+  budgets_available: boolean
 }
 
 /**

@@ -39,17 +39,18 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/config.py` | `get_settings()` — every env var, defaults, production safety guards. Never call `os.getenv` elsewhere. |
 | `src/app.py` | `create_app()`: middleware (request id, metrics, security headers), generic error handlers, routers |
 | `src/api/deps.py` | Auth (session cookie or `Bearer chk_` API key), CSRF header check, `load_collection(db, user, id, minimum)` access control |
-| `src/api/routes/` | `auth`, `collections` (+ documents), `chat` (+ conversations, models), `connectors` (admin connections, `/chat/sources`), `admin`, `health` |
+| `src/api/routes/` | `auth`, `collections` (+ documents), `chat` (+ conversations, models), `connectors` (admin connections, `/chat/sources`), `admin` (+ `/admin/models`), `usage` (`/usage/me`, `/admin/usage`, `/admin/users/{id}/budget`), `health` |
 | `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), SSO groups stored on the user at each login, rate limiter (Redis, in-memory fallback) |
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
-| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants |
+| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002) |
 | `src/ingestion/` | `filetypes` (sniffing), `loaders` (PDF+OCR, DOCX, TXT/MD, HTML), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
-| `src/llm/factory.py` | `provider:model` ids, `LLM_MODELS` allow-list, Ollama / Anthropic / OpenAI / OpenAI-compatible |
-| `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored |
+| `src/llm/factory.py` | `provider:model` ids; offered models = `hub_settings` key `models` if set (`model_offer()`, checked against `available_catalogue()`), else `LLM_MODELS` / gateway catalogue; Ollama / Anthropic / OpenAI / OpenAI-compatible |
+| `src/instance_settings.py` | `get` / `put` / `delete` of `hub_settings` (JSON per key), 5 s in-process cache (expires by itself: several workers), read errors fall back on the environment |
+| `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (backoff on transient errors only) + nightly `purge_expired` |
 | `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`), metrics, reporter, runner, `tools/fetch_service_public.py` |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
@@ -80,6 +81,13 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - Audit hash covers every column except `actor_email`, `ip`, `user_agent` (redactable for GDPR).
 - LangSmith tracing is forced off unless `LANGCHAIN_TRACING_V2=true` (it ships document excerpts out).
 - Cookie-authenticated non-GET requests need the `X-Requested-With` header (frontend sets it).
+- Only an offered model can be used: `resolve_model()` against `model_catalogue()` (offered and
+  available, default first), for every chat route and existing conversations. `model_offer()` /
+  `model_catalogue()` are blocking (database setting, gateway lookup): async code calls them through
+  `asyncio.to_thread`. An offered model absent from the available catalogue is listed, not selectable.
+- `hub_settings` holds what ContextHub decides (offered models), never a cost, a budget or a secret.
+  Budgets live on the gateway; ContextHub only modifies the budget it owns (`contexthub-<uuid>`) and
+  never a budget defined in the gateway console (removal answers 409).
 
 ## Tests
 

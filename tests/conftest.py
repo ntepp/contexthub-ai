@@ -32,11 +32,20 @@ os.environ.update(
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from src import instance_settings  # noqa: E402
 from src.config import reset_settings_cache  # noqa: E402
 
 reset_settings_cache()
 
 from src.app import app  # noqa: E402
+from src.auth import security  # noqa: E402
+
+# bcrypt at its production cost (12) takes ~0.25 s per hash or check, i.e. about a second for
+# every test that creates and logs in users. The suite only needs a valid hash: cost 10 is
+# 4x cheaper (two digits, as tests/test_security.py compares the "$2b$NN$" field as text).
+# The production value stays asserted in tests/test_admin_models.py.
+PRODUCTION_BCRYPT_ROUNDS = security._BCRYPT_ROUNDS
+security._BCRYPT_ROUNDS = 10
 from src.auth.rate_limit import limiter  # noqa: E402
 from src.auth.users import create_local_user  # noqa: E402
 from src.db.models import ROLE_ADMIN, ROLE_MEMBER, Base  # noqa: E402
@@ -65,6 +74,7 @@ def default_responder(messages) -> str:
 def _environment():
     configure_engine("sqlite://")
     Base.metadata.create_all(get_engine())
+    instance_settings.reset_cache()  # a setting of a previous test must not leak
     limiter.clear_memory()
     store = store_module.InMemoryChunkStore()
     store_module.set_store_override(store)
