@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileText, FolderPlus, Link2, RefreshCw, Settings, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, FileText, FolderPlus, Link2, Loader2, RefreshCw, ScanText, Settings, Trash2, Upload } from 'lucide-react'
 import { api, errorMessage, type Collection, type StoredDocument } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatBytes, formatDateTime, plural } from '@/lib/utils'
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
 import { Notice, PageHeader } from '@/components/ui/Notice'
 
-const ACCEPT = '.pdf,.docx,.txt,.md,.html,.htm'
+const ACCEPT = '.pdf,.docx,.txt,.md,.html,.htm,.jpg,.jpeg,.png,.tif,.tiff'
 const STATUS_LABEL: Record<StoredDocument['status'], string> = {
   queued: 'En attente',
   processing: 'Indexation',
@@ -41,6 +41,33 @@ function StatusCell({ doc }: { doc: StoredDocument }) {
   )
 }
 
+/** "page 3" / "pages 3, 7" (long lists are shortened). */
+function pagesLabel(pages: number[]): string {
+  const shown = pages.slice(0, 10).join(', ')
+  const more = pages.length > 10 ? ` et ${pages.length - 10} autres` : ''
+  return `${pages.length > 1 ? 'pages' : 'page'} ${shown}${more}`
+}
+
+function ReadingInfo({ doc }: { doc: StoredDocument }) {
+  if (doc.status !== 'ready' || (doc.ocr_pages === 0 && doc.read_mode !== 'partial')) return null
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      {doc.ocr_pages > 0 && (
+        <span className="rounded bg-ledger-soft px-1.5 py-0.5 font-medium text-ledger-dark">Numérisé (OCR)</span>
+      )}
+      {doc.ocr_confidence != null && (
+        <span className="text-slate">
+          confiance {Math.round(doc.ocr_confidence)} %
+          {doc.page_count > 1 && `, ${doc.ocr_pages} sur ${plural(doc.page_count, 'page')} lues par OCR`}
+        </span>
+      )}
+      {doc.read_mode === 'partial' && doc.ocr_low_pages.length > 0 && (
+        <span className="text-refusal">Lecture partielle : {pagesLabel(doc.ocr_low_pages)}</span>
+      )}
+    </p>
+  )
+}
+
 export function KnowledgeBase() {
   const { user, refresh } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -53,6 +80,7 @@ export function KnowledgeBase() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [urlOpen, setUrlOpen] = useState(false)
   const [toDelete, setToDelete] = useState<StoredDocument | null>(null)
+  const [toOcr, setToOcr] = useState<StoredDocument | null>(null)
   const [deleteCollection, setDeleteCollection] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -216,11 +244,12 @@ export function KnowledgeBase() {
                   </ul>
                 ) : (
                   <p className="text-slate">
-                    Déposez ici des fichiers PDF, Word, texte, Markdown ou HTML, ou{' '}
+                    Déposez ici des fichiers PDF, Word, texte, Markdown, HTML ou des documents numérisés (JPG,
+                    PNG, TIFF), ou{' '}
                     <button className="text-ledger underline" onClick={() => fileInput.current?.click()}>
                       choisissez-les
                     </button>
-                    . Les doublons sont détectés automatiquement.
+                    . Les pages numérisées sont lues par OCR ; les doublons sont détectés automatiquement.
                     <button className="ml-3 inline-flex items-center gap-1 text-ledger underline" onClick={() => setUrlOpen(true)}>
                       <Link2 size={14} />
                       Importer une page web
@@ -262,6 +291,7 @@ export function KnowledgeBase() {
                           </span>
                         )}
                         {d.title && <p className="mt-0.5 text-xs text-slate">{d.title}</p>}
+                        <ReadingInfo doc={d} />
                         {d.error_message && <p className="mt-1 text-xs text-danger">{d.error_message}</p>}
                         {d.warnings.map((w) => (
                           <p key={w} className="mt-1 flex items-start gap-1 text-xs text-refusal">
@@ -282,6 +312,21 @@ export function KnowledgeBase() {
                       {canEdit && (
                         <td className="table-cell">
                           <div className="flex justify-end gap-1">
+                            {d.ocr_eligible &&
+                              (d.status === 'queued' || d.status === 'processing' ? (
+                                <span className="inline-flex p-1.5 text-faint" title="Lecture en cours">
+                                  <Loader2 size={15} className="animate-spin" aria-label={`Lecture de ${d.filename} en cours`} />
+                                </span>
+                              ) : (
+                                <button
+                                  className="btn-ghost p-1.5"
+                                  onClick={() => setToOcr(d)}
+                                  aria-label={`Relancer l'OCR de ${d.filename}`}
+                                  title="Relancer l'OCR"
+                                >
+                                  <ScanText size={15} />
+                                </button>
+                              ))}
                             {d.status === 'failed' && (d.has_file || d.source_url) && (
                               <button
                                 className="btn-ghost p-1.5"
@@ -366,6 +411,15 @@ export function KnowledgeBase() {
           await api.deleteDocument(toDelete.id)
           await loadDocuments()
           await loadCollections()
+        }}
+      />
+
+      <OcrDialog
+        doc={toOcr}
+        onOpenChange={(open) => !open && setToOcr(null)}
+        onDone={(error) => {
+          if (error) setNotice({ tone: 'error', text: error })
+          loadDocuments().catch(() => {})
         }}
       />
 
@@ -572,6 +626,74 @@ function ImportUrlDialog({
         Adresse
       </label>
       <input id="import-url" className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://eur-lex.europa.eu/…" />
+    </Dialog>
+  )
+}
+
+function OcrDialog({
+  doc,
+  onOpenChange,
+  onDone,
+}: {
+  doc: StoredDocument | null
+  onOpenChange: (open: boolean) => void
+  onDone: (error: string | null) => void
+}) {
+  const [allPages, setAllPages] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const isPdf = doc?.mime_type === 'application/pdf'
+
+  const run = async () => {
+    if (!doc) return
+    setBusy(true)
+    let error: string | null = null
+    try {
+      await api.rerunOcr(doc.id, isPdf && allPages)
+    } catch (err) {
+      error = errorMessage(err)
+    } finally {
+      setBusy(false)
+    }
+    setAllPages(false)
+    onOpenChange(false)
+    onDone(error)
+  }
+
+  return (
+    <Dialog
+      open={doc !== null}
+      onOpenChange={onOpenChange}
+      title="Relancer l'OCR ?"
+      description={
+        <>
+          « {doc?.filename} » sera relu puis réindexé. Pendant la lecture, ses passages ne sont plus cités dans les
+          réponses ; la durée dépend du nombre de pages numérisées.
+        </>
+      }
+      footer={
+        <>
+          <button className="btn-secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+            Annuler
+          </button>
+          <button className="btn-primary" onClick={run} disabled={busy}>
+            {busy && <Loader2 size={15} className="animate-spin" aria-hidden />}
+            Relancer l'OCR
+          </button>
+        </>
+      }
+    >
+      {isPdf && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={allPages} onChange={(e) => setAllPages(e.target.checked)} />
+          <span>
+            Relire toutes les pages
+            <span className="block text-slate">
+              Par défaut, seules les pages sans texte exploitable sont lues par OCR. Cochez si le texte intégré au PDF est
+              illisible ou incomplet.
+            </span>
+          </span>
+        </label>
+      )}
     </Dialog>
   )
 }
