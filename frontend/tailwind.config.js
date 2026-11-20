@@ -29,6 +29,19 @@ export default {
       boxShadow: {
         panel: '-1px 0 0 #D8DDE6, -12px 0 24px -16px rgba(22, 33, 58, 0.18)',
       },
+      // Mobile navigation drawer (Radix keeps it mounted until the closing animation ends).
+      keyframes: {
+        'drawer-in': { from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(0)' } },
+        'drawer-out': { from: { transform: 'translateX(0)' }, to: { transform: 'translateX(-100%)' } },
+        'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        'fade-out': { from: { opacity: '1' }, to: { opacity: '0' } },
+      },
+      animation: {
+        'drawer-in': 'drawer-in 200ms ease-out',
+        'drawer-out': 'drawer-out 150ms ease-in',
+        'fade-in': 'fade-in 200ms ease-out',
+        'fade-out': 'fade-out 150ms ease-in',
+      },
     },
   },
   plugins: [],

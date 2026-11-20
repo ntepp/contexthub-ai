@@ -14,6 +14,7 @@ import {
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { MD, useMediaQuery } from '@/lib/useMediaQuery'
 import { Answer } from '@/components/chat/Answer'
 import { AttachDialog } from '@/components/chat/AttachDialog'
 import { SourcePanel } from '@/components/chat/SourcePanel'
@@ -32,6 +33,7 @@ export function Chat() {
   const navigate = useNavigate()
   const { user, refresh } = useAuth()
   const collections = user?.collections ?? []
+  const desktop = useMediaQuery(MD)
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -70,7 +72,8 @@ export function Chat() {
       setMessages([])
       setAttached([])
       setScope((current) => (current === ATTACHED ? ALL : current))
-      inputRef.current?.focus()
+      // Not on touch screens: focusing would open the virtual keyboard over the page.
+      if (window.matchMedia('(pointer: fine)').matches) inputRef.current?.focus()
       return
     }
     if (createdHere.current === conversationId) return
@@ -202,12 +205,12 @@ export function Chat() {
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-surface px-6 py-2.5">
-          <label className="flex items-center gap-2 text-sm text-slate">
+        <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-surface px-6 py-2.5 max-md:gap-2 max-md:px-3 max-md:py-2">
+          <label className="flex min-w-0 items-center gap-2 text-sm text-slate max-md:flex-1 max-md:basis-40">
             <BookOpen size={16} />
             <span className="sr-only">Périmètre de recherche</span>
             <select
-              className="rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink"
+              className="min-w-0 rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink max-md:flex-1 max-md:py-1.5 max-md:text-base"
               value={scope}
               onChange={(e) => setScope(e.target.value)}
               disabled={streaming}
@@ -224,10 +227,10 @@ export function Chat() {
             </select>
           </label>
           {models.length > 1 && (
-            <label className="flex items-center gap-2 text-sm text-slate">
+            <label className="flex min-w-0 items-center gap-2 text-sm text-slate max-md:flex-1 max-md:basis-40">
               <span className="sr-only">Modèle</span>
               <select
-                className="rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink"
+                className="min-w-0 rounded-md border border-rule bg-surface py-1 pl-2 pr-7 text-sm text-ink max-md:flex-1 max-md:py-1.5 max-md:text-base"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={streaming}
@@ -246,8 +249,8 @@ export function Chat() {
             </label>
           )}
           {selectedModel && !selectedModel.is_local && (
-            <span className="flex items-center gap-1.5 rounded-md bg-cloud-soft px-2 py-1 text-xs text-cloud">
-              <CloudUpload size={14} />
+            <span className="flex items-center gap-1.5 rounded-md bg-cloud-soft px-2 py-1 text-xs text-cloud max-md:basis-full">
+              <CloudUpload size={14} className="shrink-0" />
               {selectedModel.provider === 'gateway'
                 ? `Les extraits utiles de vos documents sont envoyés au modèle ${selectedModel.name} (${selectedModel.provider_label}).`
                 : `Les extraits utiles de vos documents sont envoyés à ${selectedModel.provider_label}.`}
@@ -256,10 +259,10 @@ export function Chat() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl px-6 py-8">
+          <div className="mx-auto max-w-3xl px-6 py-8 max-md:px-4 max-md:py-5">
             {messages.length === 0 ? (
-              <div className="pt-[12vh]">
-                <h1 className="font-serif text-3xl leading-tight">Que cherchez-vous dans vos textes ?</h1>
+              <div className="pt-[12vh] max-md:pt-[4vh]">
+                <h1 className="font-serif text-3xl leading-tight max-md:text-2xl">Que cherchez-vous dans vos textes ?</h1>
                 <p className="mt-3 max-w-xl text-slate">
                   Chaque réponse s'appuie uniquement sur les documents de vos collections et renvoie à la page exacte.
                   Si les documents ne permettent pas de répondre, ContextHub le dit.
@@ -283,7 +286,7 @@ export function Chat() {
                 {messages.map((m, i) =>
                   m.role === 'user' ? (
                     <div key={i} className="flex justify-end">
-                      <p className="max-w-[85%] whitespace-pre-wrap rounded-lg bg-wash px-4 py-2.5 text-ink">{m.content}</p>
+                      <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg bg-wash px-4 py-2.5 text-ink">{m.content}</p>
                     </div>
                   ) : (
                     <Answer
@@ -301,7 +304,8 @@ export function Chat() {
           </div>
         </div>
 
-        <div className="border-t border-rule bg-surface px-6 py-4">
+        {/* Kept at the bottom, clear of the home indicator (viewport-fit=cover). */}
+        <div className="border-t border-rule bg-surface px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 max-md:px-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:pt-3">
           <div className="mx-auto max-w-3xl">
             {attached.length > 0 && (
               <ul className="mb-2 flex flex-wrap gap-2" aria-label="Pages jointes à la conversation">
@@ -371,7 +375,12 @@ export function Chat() {
                   e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 200)}px`
                 }}
                 onKeyDown={onKeyDown}
-                placeholder="Posez une question sur vos documents. Maj + Entrée pour un saut de ligne."
+                enterKeyHint="send"
+                placeholder={
+                  desktop
+                    ? 'Posez une question sur vos documents. Maj + Entrée pour un saut de ligne.'
+                    : 'Posez votre question…'
+                }
                 className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-1.5 text-ink placeholder:text-faint focus:outline-none"
               />
               <button
@@ -383,7 +392,7 @@ export function Chat() {
                 {streaming ? <Square size={14} fill="currentColor" /> : <ArrowUp size={16} />}
               </button>
             </div>
-            <p className="mt-2 text-xs text-faint">
+            <p className="mt-2 text-xs text-faint max-md:mt-1.5">
               Outil d'aide à la recherche documentaire. Vérifiez les sources citées avant de vous appuyer sur une
               réponse.
             </p>

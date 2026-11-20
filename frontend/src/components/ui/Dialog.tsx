@@ -26,6 +26,8 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-40 bg-ink/30" />
         <RadixDialog.Content
+          // Without a description, say so: Radix otherwise warns that one is missing.
+          {...(description ? {} : { 'aria-describedby': undefined })}
           onCloseAutoFocus={(event) => {
             const target = opener.current
             if (target && target.isConnected) {
@@ -34,7 +36,9 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
             }
           }}
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-rule bg-surface p-6 shadow-xl',
+            'fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-lg border border-rule bg-surface p-6 shadow-xl',
+            // Mobile browsers: the visible height (bars, keyboard), and tighter margins on phones.
+            'supports-[height:100dvh]:max-h-[90dvh] max-sm:p-4',
             wide ? 'max-w-5xl' : 'max-w-md',
           )}
         >
@@ -50,7 +54,10 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
             </RadixDialog.Close>
           </div>
           {children}
-          {footer && <div className="mt-6 flex justify-end gap-2">{footer}</div>}
+          {/* Phones: full-width buttons, stacked with the main action on top. */}
+          {footer && (
+            <div className="mt-6 flex justify-end gap-2 max-sm:flex-col-reverse max-sm:items-stretch max-sm:[&>*]:m-0">{footer}</div>
+          )}
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
