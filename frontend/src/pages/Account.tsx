@@ -4,6 +4,7 @@ import { api, errorMessage, type ApiKey } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { formatDateTime } from '@/lib/utils'
 import { Notice, PageHeader } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 export function Account() {
   const { user } = useAuth()
@@ -32,7 +33,7 @@ export function Account() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-8 py-8">
+    <div className="h-full overflow-y-auto px-8 py-8 max-md:px-4 max-md:py-5">
       <div className="max-w-2xl">
         <PageHeader title="Mon compte" description={`${user?.full_name ? `${user.full_name}, ` : ''}${user?.email}`} />
 
@@ -40,7 +41,7 @@ export function Account() {
           <section className="mb-10">
             <h2 className="mb-3 font-semibold">Mot de passe</h2>
             {pwdNotice && <Notice tone={pwdNotice.tone} className="mb-3">{pwdNotice.text}</Notice>}
-            <form onSubmit={changePassword} className="space-y-4 rounded-lg border border-rule bg-surface p-5">
+            <form onSubmit={changePassword} className="space-y-4 rounded-lg border border-rule bg-surface p-5 max-md:p-4">
               <div>
                 <label className="label" htmlFor="pwd-current">
                   Mot de passe actuel
@@ -79,7 +80,7 @@ export function Account() {
             </Notice>
           )}
           <form
-            className="mb-4 flex gap-2"
+            className="mb-4 flex gap-2 max-sm:flex-col"
             onSubmit={async (e) => {
               e.preventDefault()
               const k = await api.createApiKey(keyName.trim())
@@ -98,36 +99,40 @@ export function Account() {
             </button>
           </form>
           {keys.length > 0 && (
-            <table className="w-full border-collapse bg-surface">
-              <thead>
-                <tr>
-                  <th className="table-head">Nom</th>
-                  <th className="table-head">Préfixe</th>
-                  <th className="table-head">Dernière utilisation</th>
-                  <th className="table-head" />
-                </tr>
-              </thead>
-              <tbody>
-                {keys.map((k) => (
-                  <tr key={k.id} className={k.revoked ? 'text-faint' : ''}>
-                    <td className="table-cell">{k.name}</td>
-                    <td className="table-cell">
-                      <code>{k.prefix}…</code>
-                    </td>
-                    <td className="table-cell text-slate">{k.last_used_at ? formatDateTime(k.last_used_at) : 'Jamais'}</td>
-                    <td className="table-cell text-right">
-                      {k.revoked ? (
-                        'Révoquée'
-                      ) : (
-                        <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => api.revokeApiKey(k.id).then(loadKeys)}>
-                          Révoquer
-                        </button>
-                      )}
-                    </td>
+            <TableScroll>
+              <table className="table-cards w-full border-collapse bg-surface">
+                <thead>
+                  <tr>
+                    <th className="table-head">Nom</th>
+                    <th className="table-head">Préfixe</th>
+                    <th className="table-head">Dernière utilisation</th>
+                    <th className="table-head" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {keys.map((k) => (
+                    <tr key={k.id} className={k.revoked ? 'text-faint' : ''}>
+                      <td className="table-cell">{k.name}</td>
+                      <td className="table-cell" data-label="Préfixe">
+                        <code>{k.prefix}…</code>
+                      </td>
+                      <td className="table-cell text-slate" data-label="Dernière utilisation">
+                        {k.last_used_at ? formatDateTime(k.last_used_at) : 'Jamais'}
+                      </td>
+                      <td className="table-cell text-right" data-cell="actions">
+                        {k.revoked ? (
+                          'Révoquée'
+                        ) : (
+                          <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => api.revokeApiKey(k.id).then(loadKeys)}>
+                            Révoquer
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </section>
       </div>

@@ -21,8 +21,8 @@ function checkStatus(key: string, check: SystemCheck): { text: string; tone: str
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex gap-4 border-b border-rule py-2 text-sm last:border-0">
-      <dt className="w-56 shrink-0 text-slate">{label}</dt>
+    <div className="flex gap-4 border-b border-rule py-2 text-sm last:border-0 max-md:flex-col max-md:gap-0.5">
+      <dt className="w-56 shrink-0 text-slate max-md:w-auto">{label}</dt>
       <dd className="min-w-0 flex-1">{children}</dd>
     </div>
   )

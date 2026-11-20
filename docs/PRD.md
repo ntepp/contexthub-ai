@@ -290,6 +290,7 @@ la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_sca
 | NFR-5 Qualité | ✅ | 150 tests (SQLite + PostgreSQL/pgvector réel) et 3 scénarios e2e Playwright, ruff, CI GitHub Actions |
 | NFR-6 Reproductibilité | ✅ | Dépendances Python épinglées, `package-lock.json` |
 | NFR-7 Langue | ✅ | Interface en français |
+| NFR-9 Interface responsive (mobile, tablette) | 🟡 | **Implémentée, vérifiée sur API simulée, pas encore sur téléphone réel.** Sous 768 px : barre supérieure (menu, titre de la page ou de la conversation, nouvelle question) et navigation en tiroir (dialogue Radix : piège de focus, Échap, clic extérieur, défilement bloqué) ; chat pleine largeur, saisie en bas (`100dvh`, zones de sécurité, champs en 16 px), sources en plein écran (feuille à droite sur tablette) ; listes principales en cartes (`table-cards`), autres tableaux défilant dans leur cadre (`TableScroll`) ; boutons d'au moins 40 px au toucher. Captures Playwright à 360, 768 et 1280 px : aucune page ne déborde horizontalement. Bureau (≥ 1024 px) inchangé, hormis les tableaux trop larges qui défilent désormais dans leur cadre et non plus avec toute la page. Non vérifié : Safari iOS et Chrome Android réels (clavier virtuel, encoche, PDF dans la visionneuse) |
 | NFR-8 Performance | ⚠️ | Ingestion : 25 s pour 148 pages ✅. Réponse : non mesurée sur matériel cible (69 s sur GPU portable 4 Go partagé) |
 
 ## 12. Reste à faire avant la première vente

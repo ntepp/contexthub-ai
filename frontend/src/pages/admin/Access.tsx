@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errorMessage, type Collection, type Grant, type GroupGrant, type User } from '@/lib/api'
 import { Notice } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 export function Access() {
   const [collections, setCollections] = useState<Collection[]>([])
@@ -72,48 +73,50 @@ export function Access() {
       </p>
       {error && <Notice tone="error" className="mb-4">{error}</Notice>}
 
-      <table className="mb-6 w-full border-collapse bg-surface">
-        <thead>
-          <tr>
-            <th className="table-head">Personne</th>
-            <th className="table-head">Droit</th>
-            <th className="table-head" />
-          </tr>
-        </thead>
-        <tbody>
-          {grants.length === 0 && (
+      <TableScroll className="mb-6">
+        <table className="table-cards w-full border-collapse bg-surface">
+          <thead>
             <tr>
-              <td className="table-cell text-slate" colSpan={3}>
-                Aucun droit nominatif sur cette collection.
-              </td>
+              <th className="table-head">Personne</th>
+              <th className="table-head">Droit</th>
+              <th className="table-head" />
             </tr>
-          )}
-          {grants.map((g) => (
-            <tr key={g.user_id}>
-              <td className="table-cell">
-                {g.full_name || g.email}
-                {g.full_name && <span className="block text-xs text-slate">{g.email}</span>}
-              </td>
-              <td className="table-cell">
-                <select
-                  className="rounded border border-rule bg-surface px-1.5 py-1 text-sm"
-                  value={g.level}
-                  onChange={(e) => run(() => api.setGrant(selected, g.user_id, e.target.value as 'viewer' | 'editor'))}
-                  aria-label={`Droit de ${g.email}`}
-                >
-                  <option value="viewer">Lecture : peut interroger</option>
-                  <option value="editor">Modification : peut aussi importer et supprimer</option>
-                </select>
-              </td>
-              <td className="table-cell text-right">
-                <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => run(() => api.revokeGrant(selected, g.user_id))}>
-                  Retirer
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {grants.length === 0 && (
+              <tr>
+                <td className="table-cell text-slate" colSpan={3}>
+                  Aucun droit nominatif sur cette collection.
+                </td>
+              </tr>
+            )}
+            {grants.map((g) => (
+              <tr key={g.user_id}>
+                <td className="table-cell">
+                  {g.full_name || g.email}
+                  {g.full_name && <span className="block text-xs text-slate">{g.email}</span>}
+                </td>
+                <td className="table-cell" data-label="Droit">
+                  <select
+                    className="max-w-full rounded border border-rule bg-surface px-1.5 py-1 text-sm max-md:py-1.5 max-md:text-base"
+                    value={g.level}
+                    onChange={(e) => run(() => api.setGrant(selected, g.user_id, e.target.value as 'viewer' | 'editor'))}
+                    aria-label={`Droit de ${g.email}`}
+                  >
+                    <option value="viewer">Lecture : peut interroger</option>
+                    <option value="editor">Modification : peut aussi importer et supprimer</option>
+                  </select>
+                </td>
+                <td className="table-cell text-right" data-cell="actions">
+                  <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => run(() => api.revokeGrant(selected, g.user_id))}>
+                    Retirer
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-rule bg-surface p-4">
         <div className="min-w-56 flex-1">
@@ -157,48 +160,50 @@ export function Access() {
         Tous les membres d'un groupe accèdent à la collection dès leur connexion par SSO. L'appartenance est relue à
         chaque connexion : quitter le groupe dans l'annuaire retire l'accès à la connexion suivante.
       </p>
-      <table className="mb-6 w-full border-collapse bg-surface">
-        <thead>
-          <tr>
-            <th className="table-head">Groupe</th>
-            <th className="table-head">Droit</th>
-            <th className="table-head" />
-          </tr>
-        </thead>
-        <tbody>
-          {groupGrants.length === 0 && (
+      <TableScroll className="mb-6">
+        <table className="table-cards w-full border-collapse bg-surface">
+          <thead>
             <tr>
-              <td className="table-cell text-slate" colSpan={3}>
-                Aucun groupe n'a accès à cette collection.
-              </td>
+              <th className="table-head">Groupe</th>
+              <th className="table-head">Droit</th>
+              <th className="table-head" />
             </tr>
-          )}
-          {groupGrants.map((g) => (
-            <tr key={g.group}>
-              <td className="table-cell">{g.group}</td>
-              <td className="table-cell">
-                <select
-                  className="rounded border border-rule bg-surface px-1.5 py-1 text-sm"
-                  value={g.level}
-                  onChange={(e) => run(() => api.setGroupGrant(selected, g.group, e.target.value as 'viewer' | 'editor'))}
-                  aria-label={`Droit du groupe ${g.group}`}
-                >
-                  <option value="viewer">Lecture : peut interroger</option>
-                  <option value="editor">Modification : peut aussi importer et supprimer</option>
-                </select>
-              </td>
-              <td className="table-cell text-right">
-                <button
-                  className="btn-ghost px-2 py-1 text-xs text-danger"
-                  onClick={() => run(() => api.revokeGroupGrant(selected, g.group))}
-                >
-                  Retirer
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {groupGrants.length === 0 && (
+              <tr>
+                <td className="table-cell text-slate" colSpan={3}>
+                  Aucun groupe n'a accès à cette collection.
+                </td>
+              </tr>
+            )}
+            {groupGrants.map((g) => (
+              <tr key={g.group}>
+                <td className="table-cell">{g.group}</td>
+                <td className="table-cell" data-label="Droit">
+                  <select
+                    className="max-w-full rounded border border-rule bg-surface px-1.5 py-1 text-sm max-md:py-1.5 max-md:text-base"
+                    value={g.level}
+                    onChange={(e) => run(() => api.setGroupGrant(selected, g.group, e.target.value as 'viewer' | 'editor'))}
+                    aria-label={`Droit du groupe ${g.group}`}
+                  >
+                    <option value="viewer">Lecture : peut interroger</option>
+                    <option value="editor">Modification : peut aussi importer et supprimer</option>
+                  </select>
+                </td>
+                <td className="table-cell text-right" data-cell="actions">
+                  <button
+                    className="btn-ghost px-2 py-1 text-xs text-danger"
+                    onClick={() => run(() => api.revokeGroupGrant(selected, g.group))}
+                  >
+                    Retirer
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-rule bg-surface p-4">
         <div className="min-w-56 flex-1">

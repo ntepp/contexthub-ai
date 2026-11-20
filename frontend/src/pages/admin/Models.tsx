@@ -321,7 +321,7 @@ export function Models() {
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-rule bg-surface">
-            <table className="w-full border-collapse">
+            <table className="w-full border-collapse max-md:min-w-[40rem]">
               <caption className="sr-only">Modèles proposés dans le chat, dans l'ordre d'affichage</caption>
               <thead>
                 <tr>
@@ -437,7 +437,7 @@ export function Models() {
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-rule bg-surface">
-            <table className="w-full border-collapse">
+            <table className="w-full border-collapse max-md:min-w-[40rem]">
               <caption className="sr-only">Modèles du catalogue non proposés dans le chat</caption>
               <thead>
                 <tr>

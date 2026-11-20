@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatBytes, formatDateTime, plural } from '@/lib/utils'
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
 import { Notice, PageHeader } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 const ACCEPT = '.pdf,.docx,.txt,.md,.html,.htm,.jpg,.jpeg,.png,.tif,.tiff'
 const STATUS_LABEL: Record<StoredDocument['status'], string> = {
@@ -140,9 +141,13 @@ export function KnowledgeBase() {
   }
 
   return (
-    <div className="flex h-full">
-      <nav className="w-60 shrink-0 overflow-y-auto border-r border-rule bg-surface px-3 py-4" aria-label="Collections">
-        <div className="mb-2 flex items-center justify-between px-2.5">
+    // Below lg the collections become a row of chips above the documents.
+    <div className="flex h-full max-lg:flex-col">
+      <nav
+        className="w-60 shrink-0 overflow-y-auto border-r border-rule bg-surface px-3 py-4 max-lg:w-full max-lg:overflow-visible max-lg:border-b max-lg:border-r-0 max-lg:pb-2 max-lg:pt-2"
+        aria-label="Collections"
+      >
+        <div className="mb-2 flex items-center justify-between px-2.5 max-lg:mb-1">
           <h2 className="text-sm font-semibold">Collections</h2>
           {isAdmin && (
             <button className="btn-ghost p-1.5" onClick={() => setCreating(true)} aria-label="Créer une collection">
@@ -155,22 +160,25 @@ export function KnowledgeBase() {
             {isAdmin ? 'Créez une première collection pour y importer des documents.' : "Aucune collection ne vous est encore ouverte."}
           </p>
         )}
-        {collections.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => setActiveId(c.id)}
-            className={cn(
-              'flex w-full items-baseline justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-wash',
-              c.id === activeId ? 'bg-wash font-medium text-ink' : 'text-slate',
-            )}
-          >
-            <span className="truncate">{c.name}</span>
-            <span className="text-xs text-faint">{c.document_count}</span>
-          </button>
-        ))}
+        <div className="max-lg:-mx-3 max-lg:flex max-lg:gap-1.5 max-lg:overflow-x-auto max-lg:px-3 max-lg:pb-1">
+          {collections.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setActiveId(c.id)}
+              className={cn(
+                'flex w-full items-baseline justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-wash',
+                'max-lg:w-auto max-lg:max-w-[16rem] max-lg:shrink-0 max-lg:border max-lg:py-2',
+                c.id === activeId ? 'bg-wash font-medium text-ink max-lg:border-ledger/40' : 'text-slate max-lg:border-rule',
+              )}
+            >
+              <span className="truncate">{c.name}</span>
+              <span className="text-xs text-faint">{c.document_count}</span>
+            </button>
+          ))}
+        </div>
       </nav>
 
-      <div className="min-w-0 flex-1 overflow-y-auto px-8 py-8">
+      <div className="min-w-0 flex-1 overflow-y-auto px-8 py-8 max-lg:min-h-0 max-md:px-4 max-md:py-5">
         {active ? (
           <>
             <PageHeader
@@ -218,7 +226,7 @@ export function KnowledgeBase() {
                   uploadFiles(e.dataTransfer.files)
                 }}
                 className={cn(
-                  'mb-6 rounded-lg border border-dashed px-6 py-5 text-sm transition-colors',
+                  'mb-6 rounded-lg border border-dashed px-6 py-5 text-sm transition-colors max-md:px-4 max-md:py-4',
                   dragging ? 'border-ledger bg-ledger-soft' : 'border-rule bg-surface',
                 )}
               >
@@ -267,91 +275,95 @@ export function KnowledgeBase() {
                 </p>
               </div>
             ) : (
-              <table className="w-full border-collapse rounded-lg bg-surface">
-                <thead>
-                  <tr>
-                    <th className="table-head">Document</th>
-                    <th className="table-head">Statut</th>
-                    <th className="table-head">Contenu</th>
-                    <th className="table-head">Ajouté le</th>
-                    {canEdit && <th className="table-head w-20" />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {documents.map((d) => (
-                    <tr key={d.id}>
-                      <td className="table-cell max-w-xs">
-                        {d.has_file ? (
-                          <a className="block truncate hover:text-ledger hover:underline" href={api.documentFileUrl(d.id)} target="_blank" rel="noreferrer" title={d.filename}>
-                            {d.filename}
-                          </a>
-                        ) : (
-                          <span className="block truncate" title={d.filename}>
-                            {d.filename}
-                          </span>
-                        )}
-                        {d.title && <p className="mt-0.5 text-xs text-slate">{d.title}</p>}
-                        <ReadingInfo doc={d} />
-                        {d.error_message && <p className="mt-1 text-xs text-danger">{d.error_message}</p>}
-                        {d.warnings.map((w) => (
-                          <p key={w} className="mt-1 flex items-start gap-1 text-xs text-refusal">
-                            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                            {w}
-                          </p>
-                        ))}
-                      </td>
-                      <td className="table-cell">
-                        <StatusCell doc={d} />
-                      </td>
-                      <td className="table-cell text-slate">
-                        {d.page_count > 0 && <span className="block">{plural(d.page_count, 'page')}</span>}
-                        {d.chunk_count > 0 && <span className="block">{plural(d.chunk_count, 'passage indexé', 'passages indexés')}</span>}
-                        {d.size_bytes > 0 && <span className="block text-xs text-faint">{formatBytes(d.size_bytes)}</span>}
-                      </td>
-                      <td className="table-cell text-slate">{formatDateTime(d.created_at)}</td>
-                      {canEdit && (
-                        <td className="table-cell">
-                          <div className="flex justify-end gap-1">
-                            {d.ocr_eligible &&
-                              (d.status === 'queued' || d.status === 'processing' ? (
-                                <span className="inline-flex p-1.5 text-faint" title="Lecture en cours">
-                                  <Loader2 size={15} className="animate-spin" aria-label={`Lecture de ${d.filename} en cours`} />
-                                </span>
-                              ) : (
+              <TableScroll>
+                <table className="table-cards w-full border-collapse rounded-lg bg-surface">
+                  <thead>
+                    <tr>
+                      <th className="table-head">Document</th>
+                      <th className="table-head">Statut</th>
+                      <th className="table-head">Contenu</th>
+                      <th className="table-head">Ajouté le</th>
+                      {canEdit && <th className="table-head w-20" />}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {documents.map((d) => (
+                      <tr key={d.id}>
+                        <td className="table-cell max-w-xs">
+                          {d.has_file ? (
+                            <a className="block truncate hover:text-ledger hover:underline" href={api.documentFileUrl(d.id)} target="_blank" rel="noreferrer" title={d.filename}>
+                              {d.filename}
+                            </a>
+                          ) : (
+                            <span className="block truncate" title={d.filename}>
+                              {d.filename}
+                            </span>
+                          )}
+                          {d.title && <p className="mt-0.5 text-xs text-slate">{d.title}</p>}
+                          <ReadingInfo doc={d} />
+                          {d.error_message && <p className="mt-1 text-xs text-danger">{d.error_message}</p>}
+                          {d.warnings.map((w) => (
+                            <p key={w} className="mt-1 flex items-start gap-1 text-xs text-refusal">
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              {w}
+                            </p>
+                          ))}
+                        </td>
+                        <td className="table-cell" data-label="Statut">
+                          <StatusCell doc={d} />
+                        </td>
+                        <td className="table-cell text-slate" data-label="Contenu">
+                          {d.page_count > 0 && <span className="block">{plural(d.page_count, 'page')}</span>}
+                          {d.chunk_count > 0 && <span className="block">{plural(d.chunk_count, 'passage indexé', 'passages indexés')}</span>}
+                          {d.size_bytes > 0 && <span className="block text-xs text-faint">{formatBytes(d.size_bytes)}</span>}
+                        </td>
+                        <td className="table-cell text-slate" data-label="Ajouté le">
+                          {formatDateTime(d.created_at)}
+                        </td>
+                        {canEdit && (
+                          <td className="table-cell" data-cell="actions">
+                            <div className="flex justify-end gap-1 max-md:flex-wrap max-md:justify-start">
+                              {d.ocr_eligible &&
+                                (d.status === 'queued' || d.status === 'processing' ? (
+                                  <span className="inline-flex p-1.5 text-faint" title="Lecture en cours">
+                                    <Loader2 size={15} className="animate-spin" aria-label={`Lecture de ${d.filename} en cours`} />
+                                  </span>
+                                ) : (
+                                  <button
+                                    className="btn-ghost p-1.5"
+                                    onClick={() => setToOcr(d)}
+                                    aria-label={`Relancer l'OCR de ${d.filename}`}
+                                    title="Relancer l'OCR"
+                                  >
+                                    <ScanText size={15} />
+                                  </button>
+                                ))}
+                              {d.status === 'failed' && (d.has_file || d.source_url) && (
                                 <button
                                   className="btn-ghost p-1.5"
-                                  onClick={() => setToOcr(d)}
-                                  aria-label={`Relancer l'OCR de ${d.filename}`}
-                                  title="Relancer l'OCR"
+                                  onClick={() => api.reindexDocument(d.id).then(loadDocuments)}
+                                  aria-label={`Relancer l'indexation de ${d.filename}`}
+                                  title="Relancer l'indexation"
                                 >
-                                  <ScanText size={15} />
+                                  <RefreshCw size={15} />
                                 </button>
-                              ))}
-                            {d.status === 'failed' && (d.has_file || d.source_url) && (
+                              )}
                               <button
-                                className="btn-ghost p-1.5"
-                                onClick={() => api.reindexDocument(d.id).then(loadDocuments)}
-                                aria-label={`Relancer l'indexation de ${d.filename}`}
-                                title="Relancer l'indexation"
+                                className="btn-ghost p-1.5 hover:text-danger"
+                                onClick={() => setToDelete(d)}
+                                aria-label={`Supprimer ${d.filename}`}
+                                title="Supprimer"
                               >
-                                <RefreshCw size={15} />
+                                <Trash2 size={15} />
                               </button>
-                            )}
-                            <button
-                              className="btn-ghost p-1.5 hover:text-danger"
-                              onClick={() => setToDelete(d)}
-                              aria-label={`Supprimer ${d.filename}`}
-                              title="Supprimer"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
           </>
         ) : (
