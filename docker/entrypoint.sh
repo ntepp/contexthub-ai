@@ -19,6 +19,10 @@ case "$1" in
       --loglevel="${LOG_LEVEL:-INFO}" \
       --concurrency="${WORKER_CONCURRENCY:-2}"
     ;;
+  worker-ocr)
+    # Scanned documents only (queue "ocr"), OCR_WORKER_CONCURRENCY processes.
+    exec python -m src.workers.ocr_worker
+    ;;
   beat)
     exec celery -A src.workers.celery_app beat --loglevel=INFO --schedule /tmp/celerybeat-schedule
     ;;

@@ -74,6 +74,11 @@ services:
     <<: *app
     command: ["worker"]
 
+  # Scanned documents (queue "ocr"): a long scan never delays a text document.
+  worker-ocr:
+    <<: *app
+    command: ["worker-ocr"]
+
   beat:
     <<: *app
     command: ["beat"]

@@ -115,3 +115,83 @@ def make_pdf(pages: list[list[str]]) -> bytes:
         out += b"%010d 00000 n \n" % offset
     out += b"trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, catalog, xref)
     return bytes(out)
+
+
+# ---------------------------------------------------------------------------
+# OCR (ADR-003)
+# ---------------------------------------------------------------------------
+
+
+class FakeOcrEngine:
+    """Scripted OCR engine: returns ``pages`` in order (text, confidence) or raises the
+    exception given in place of a page; records every call."""
+
+    name = "fake"
+
+    def __init__(self, pages=None, languages=("eng", "fra", "osd"), available=True, rotation=0, sure=10.0):
+        from src.ocr.base import EngineInfo
+
+        self.pages = list(pages or [])
+        self.info = EngineInfo(available=available, version="fake 1.0", languages=list(languages))
+        self.rotation = rotation
+        self.sure = sure  # orientation confidence: below 1.0 the reader checks a second way
+        self.calls: list[dict] = []
+
+    def probe(self):
+        return self.info
+
+    def detect_orientation(self, image, timeout):
+        return self.rotation, self.sure
+
+    def recognize(self, image, languages, timeout):
+        from src.ocr.base import OcrResult
+
+        self.calls.append({"size": image.size, "languages": languages, "timeout": timeout})
+        item = self.pages.pop(0) if self.pages else ("Texte reconnu par le faux moteur OCR " * 3, 91.0)
+        if isinstance(item, BaseException):
+            raise item
+        text, confidence = item
+        return OcrResult(text=text, confidence=confidence, words=len(text.split()))
+
+
+def scan_image(size=(1240, 1754), lines=12, angle=0.0):
+    """A synthetic scanned page: black text-like bars on white (not blank), grayscale."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", size, 255)
+    draw = ImageDraw.Draw(image)
+    width, height = size
+    step = max(12, height // (lines + 4))
+    for i in range(lines):
+        y = step * (i + 2)
+        draw.rectangle([width // 10, y, width - width // 10 - (i % 3) * width // 12, y + step // 3], fill=0)
+    return image.rotate(angle, expand=True, fillcolor=255) if angle else image
+
+
+def image_bytes(images, fmt: str) -> bytes:
+    """Encode one image (or a list: multipage TIFF / PDF) as ``fmt``."""
+    import io
+
+    images = images if isinstance(images, list) else [images]
+    buffer = io.BytesIO()
+    first, rest = images[0], images[1:]
+    extra = {"save_all": True, "append_images": rest} if rest else {}
+    if fmt == "PDF":
+        extra["resolution"] = 150.0
+    first.save(buffer, format=fmt, **extra)
+    return buffer.getvalue()
+
+
+def merge_pdfs(*parts: bytes) -> bytes:
+    """Concatenate PDFs page by page (mixed native + scanned documents)."""
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    for part in parts:
+        for page in PdfReader(io.BytesIO(part)).pages:
+            writer.add_page(page)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()

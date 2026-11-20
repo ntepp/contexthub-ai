@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     chunk_definitions: bool = True
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
+    # A PDF page whose text layer has fewer letters and digits than this is read by OCR
+    # (the native text is kept when OCR does not find more).
+    ocr_min_page_chars: int = 50
+    # Pages whose mean OCR word confidence (0-100) is below this are reported as badly read.
+    ocr_min_confidence: float = 60.0
+    ocr_dpi: int = 300  # rendering resolution of PDF pages, target resolution of scans
+    ocr_page_timeout_seconds: int = 120
+    # Processes of the dedicated OCR worker (python -m src.workers.ocr_worker), queue "ocr".
+    ocr_worker_concurrency: int = 1
 
     # ------------------------------------------------------------------ connectors
     # Pages picked by a user in Confluence / Notion are attached to one conversation.

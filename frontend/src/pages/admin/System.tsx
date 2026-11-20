@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { api, errorMessage, type SystemStatus } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { api, errorMessage, type SystemCheck, type SystemStatus } from '@/lib/api'
+import { cn, plural } from '@/lib/utils'
 import { Notice } from '@/components/ui/Notice'
 
 const CHECK_LABELS: Record<string, string> = {
@@ -10,6 +10,13 @@ const CHECK_LABELS: Record<string, string> = {
   workers: "Workers d'indexation",
   ollama: 'Serveur de modèles local (Ollama)',
   gateway: 'Passerelle LLM',
+  ocr: 'OCR',
+}
+
+function checkStatus(key: string, check: SystemCheck): { text: string; tone: string } {
+  if (key === 'ocr' && check.enabled === false) return { text: 'Désactivé', tone: 'text-slate' }
+  if (check.ok) return { text: 'Opérationnel', tone: 'text-ledger' }
+  return { text: `Indisponible${check.error ? ` (${check.error})` : ''}`, tone: 'text-danger' }
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -47,9 +54,13 @@ export function System() {
         <dl className="rounded-lg border border-rule bg-surface px-4">
           {Object.entries(status.checks).map(([key, check]) => (
             <Row key={key} label={CHECK_LABELS[key] ?? key}>
-              <span className={cn('font-medium', check.ok ? 'text-ledger' : 'text-danger')}>
-                {check.ok ? 'Opérationnel' : `Indisponible${check.error ? ` (${check.error})` : ''}`}
-              </span>
+              <span className={cn('font-medium', checkStatus(key, check).tone)}>{checkStatus(key, check).text}</span>
+              {key === 'ocr' && check.available && (
+                <span className="block text-xs text-slate">
+                  {[check.engine === 'tesseract' ? 'Tesseract' : check.engine, check.version].filter(Boolean).join(' ')}
+                  {check.languages && check.languages.length > 0 && `, langues installées : ${check.languages.join(', ')}`}
+                </span>
+              )}
               {/* The gateway check used to copy its notes into `workers`: when it sends `notes`, only those are shown. */}
               {check.workers && check.workers.length > 0 && !(key === 'gateway' && check.notes) && (
                 <span className="block text-xs text-slate">{check.workers.join(', ')}</span>
@@ -108,7 +119,15 @@ export function System() {
             {c.retrieval.reranker !== 'none' && ', re-classement activé'}
           </Row>
           <Row label="OCR">
-            {c.ocr.enabled ? (c.ocr.available ? 'Activé' : 'Activé mais Tesseract introuvable') : 'Désactivé'}
+            {c.ocr.enabled ? (c.ocr.available ? 'Activé, sur ce serveur' : 'Activé mais Tesseract introuvable') : 'Désactivé'}
+            {c.ocr.enabled && c.ocr.languages && (
+              <span className="block text-xs text-slate">
+                Langues {c.ocr.languages}
+                {c.ocr.dpi ? `, ${c.ocr.dpi} dpi` : ''}
+                {c.ocr.min_confidence != null ? `, page signalée sous ${c.ocr.min_confidence} % de confiance` : ''}
+                {c.ocr.worker_concurrency ? `, ${plural(c.ocr.worker_concurrency, 'processus', 'processus')} OCR` : ''}
+              </span>
+            )}
           </Row>
           <Row label="Import de pages web">{c.url_ingestion ? 'Autorisé' : 'Désactivé'}</Row>
           <Row label="SSO">{c.sso ? 'Configuré' : 'Non configuré'}</Row>

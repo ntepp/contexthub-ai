@@ -18,7 +18,7 @@ from src.ingestion import storage
 from src.ingestion.chunking import chunk_pages
 from src.ingestion.eu_acts import detect_act
 from src.ingestion.filetypes import IngestionError, sniff
-from src.ingestion.loaders import load_file
+from src.ingestion.loaders import OcrOptions, load_file
 from src.ingestion.url_fetch import fetch_url
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import ChunkRecord, get_store
@@ -33,6 +33,8 @@ class IngestionResult:
     chunk_count: int
     page_count: int
     seconds: float
+    read_mode: str = "native"
+    ocr_pages: int = 0
 
 
 def _update(document_id: uuid.UUID, **fields) -> None:
@@ -58,7 +60,10 @@ def _materialise_url(doc: Document) -> tuple[Path, str]:
     return destination, fetched.mime_type
 
 
-def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
+def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None) -> IngestionResult:
+    """Index one document. ``ocr.mode="defer"`` (the default indexing task) raises
+    ``OcrRequired`` instead of reading scanned pages, so that they are read on the "ocr"
+    queue; in-process callers (CLI, evaluation) read them right away."""
     settings = get_settings()
     document_id = uuid.UUID(str(document_id))
     started = time.time()
@@ -90,7 +95,10 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
             raise IngestionError("Fichier source introuvable sur le disque.")
         sniff(path, mime)
 
-    loaded = load_file(path, mime)
+    ocr = ocr or OcrOptions()
+    if ocr.on_progress is None:
+        ocr.on_progress = lambda done, total: _update(document_id, progress_current=done, progress_total=total)
+    loaded = load_file(path, mime, ocr)
     act = detect_act(loaded.pages[0].text) if loaded.pages else None
     if act is not None:
         log.info("[ingestion] texte reconnu : %s", act.label)
@@ -102,6 +110,8 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         split_definitions=settings.chunk_definitions,
     )
     if not chunks:
+        if loaded.ocr_attempted:
+            raise IngestionError("Aucun texte reconnu par l'OCR dans ce document numérisé.")
         raise IngestionError(
             "Aucun texte exploitable dans ce document"
             + (" (document numérisé : activez l'OCR)." if loaded.page_count else ".")
@@ -114,6 +124,11 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         page_count=loaded.page_count,
         warnings=loaded.warnings or None,
         title=act.label if act else None,
+        progress_current=0,
+        read_mode=loaded.read_mode,
+        ocr_pages=loaded.ocr_pages,
+        ocr_confidence=loaded.ocr_confidence,
+        ocr_low_pages=loaded.low_pages or None,
     )
     log.info("[ingestion] %s : %d chunks à indexer par lots de %d", doc.filename, total, settings.embed_batch_size)
 
@@ -156,7 +171,7 @@ def ingest_document(document_id: uuid.UUID | str) -> IngestionResult:
         indexed_at=utcnow(),
     )
     log.info("[ingestion] %s indexé : %d chunks, %.1fs", doc.filename, total, elapsed)
-    return IngestionResult(str(document_id), total, loaded.page_count, elapsed)
+    return IngestionResult(str(document_id), total, loaded.page_count, elapsed, loaded.read_mode, loaded.ocr_pages)
 
 
 def mark_failed(document_id: uuid.UUID | str, message: str) -> None:

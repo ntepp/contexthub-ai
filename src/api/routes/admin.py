@@ -35,7 +35,6 @@ from src.db.models import (
     User,
 )
 from src.db.session import get_db
-from src.ingestion.loaders import ocr_available
 from src.llm import gateway
 from src.llm.factory import (
     AVAILABILITY_AVAILABLE,
@@ -49,6 +48,7 @@ from src.llm.factory import (
     model_offer,
     validate_offer,
 )
+from src.ocr.registry import engine_check
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -523,6 +523,22 @@ def _check_redis() -> dict:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def queue_notes(active_queues: dict[str, list[dict]]) -> list[str]:
+    """Remarks on which queues the running workers consume (default and "ocr")."""
+    from src.workers.celery_app import DEFAULT_QUEUE, OCR_QUEUE
+
+    consumed = {q.get("name") for queues in active_queues.values() for q in queues or []}
+    notes = []
+    if active_queues and DEFAULT_QUEUE not in consumed:
+        notes.append("Aucun worker ne consomme la file d'indexation par défaut : les imports restent en attente.")
+    if active_queues and OCR_QUEUE not in consumed and get_settings().ocr_enabled:
+        notes.append(
+            "Aucun worker OCR actif (file « ocr ») : les documents numérisés restent en attente. "
+            "Lancez python -m src.workers.ocr_worker."
+        )
+    return notes
+
+
 def _check_workers() -> dict:
     try:
         from src.workers.celery_app import celery_app
@@ -530,8 +546,14 @@ def _check_workers() -> dict:
         with celery_app.connection_for_read() as conn:
             # Fail fast when the broker is down (the default retries cost ~6 s per call).
             conn.ensure_connection(max_retries=1, interval_start=0, interval_step=0, timeout=1)
-            replies = celery_app.control.inspect(timeout=1.0, connection=conn).ping() or {}
-        return {"ok": bool(replies), "workers": sorted(replies)}
+            inspector = celery_app.control.inspect(timeout=1.0, connection=conn)
+            replies = inspector.ping() or {}
+            queues = (inspector.active_queues() or {}) if replies else {}
+        check: dict = {"ok": bool(replies), "workers": sorted(replies)}
+        notes = queue_notes(queues)
+        if notes:
+            check["notes"] = notes
+        return check
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__}
 
@@ -573,7 +595,7 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
         "messages": db.execute(select(func.count()).select_from(Message)).scalar_one(),
     }
     uses_ollama = settings.embedding_provider == "ollama" or any(m.provider.value == "ollama" for m in model_catalogue())
-    probes = {"redis": _check_redis, "workers": _check_workers, "ocr": ocr_available}
+    probes = {"redis": _check_redis, "workers": _check_workers, "ocr": engine_check}
     if uses_ollama:
         probes["ollama"] = _check_ollama
     if settings.gateway_enabled:
@@ -582,7 +604,7 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         futures = {name: pool.submit(fn) for name, fn in probes.items()}
         results = {name: future.result() for name, future in futures.items()}
-    ocr_ok = results.pop("ocr")
+    ocr_check = results["ocr"]
     return {
         "version": settings.app_version,
         "environment": settings.environment,
@@ -598,7 +620,16 @@ def system_status(admin: User = Depends(require_admin), db: Session = Depends(ge
                 "hybrid": settings.retrieval_hybrid,
                 "reranker": settings.reranker,
             },
-            "ocr": {"enabled": settings.ocr_enabled, "available": ocr_ok},
+            "ocr": {
+                "enabled": settings.ocr_enabled,
+                "available": bool(ocr_check.get("available")),
+                "languages": settings.ocr_languages,
+                "min_page_chars": settings.ocr_min_page_chars,
+                "min_confidence": settings.ocr_min_confidence,
+                "dpi": settings.ocr_dpi,
+                "page_timeout_seconds": settings.ocr_page_timeout_seconds,
+                "worker_concurrency": settings.ocr_worker_concurrency,
+            },
             "url_ingestion": settings.allow_url_ingestion,
             "sso": settings.oidc_enabled,
             "retention_days": {

@@ -150,11 +150,54 @@ LLM_MODELS=gateway:gpt-4o,gateway:llama3.1:8b   # facultatif : modèles proposé
 Une passerelle de développement prête à l'emploi (profil compose `gateway`) et la procédure de
 vérification de bout en bout sont décrites dans `deploy/litellm/README.md`.
 
-## 6. Exploitation courante
+## 6. Documents numérisés (OCR)
+
+Les images (JPG, PNG, TIFF multipage) et les pages de PDF sans couche texte exploitable sont
+lues par Tesseract, sur le serveur (aucun moteur cloud). ADR-003.
+
+- **Worker dédié** : l'OCR passe par la file Celery `ocr`, servie par le service `worker-ocr`
+  (`python -m src.workers.ocr_worker`, `OCR_WORKER_CONCURRENCY` processus, 1 par défaut). Le
+  service `worker` ne consomme que la file par défaut : un document texte importé pendant un
+  long scan est indexé sans attendre. Un PDF commence sur la file par défaut ; s'il contient
+  des pages à lire, il est transmis à la file `ocr` (statut « En attente » entre les deux).
+  Sans worker OCR actif, *Administration › Système* le signale (contrôle « Workers »).
+- **Langues** : `OCR_LANGUAGES=fra+eng` (paquets `tesseract-ocr-fra`, `tesseract-ocr-eng`,
+  inclus dans l'image). Ajoutez un paquet `tesseract-ocr-<langue>` au `docker/Dockerfile` puis
+  la langue à `OCR_LANGUAGES` (`fra+eng+deu`). Une langue configurée mais absente est ignorée
+  et signalée dans *Administration › Système* (contrôle « OCR ») ; si aucune n'est installée,
+  l'OCR est désactivé. Les données `osd` (`tesseract-ocr-osd`) servent à redresser les pages
+  tournées de 90°, 180° ou 270°.
+- **Qualité** : une page de PDF passe à l'OCR si sa couche texte compte moins de
+  `OCR_MIN_PAGE_CHARS` lettres et chiffres (le texte natif est gardé quand l'OCR ne lit pas
+  plus) ; pages rendues à `OCR_DPI` (300) ; les scans de faible résolution sont agrandis,
+  redressés (±5°). Une page dont la confiance moyenne est inférieure à `OCR_MIN_CONFIDENCE`
+  (60/100), en échec ou au-delà de `OCR_PAGE_TIMEOUT_SECONDS` (120 s) est signalée : le
+  document passe en « Lecture partielle : pages … ». Les pages blanches ne sont pas signalées.
+- **Relancer l'OCR** : bouton « Relancer l'OCR » de la Base documentaire (droits éditeur), ou
+  `POST /api/documents/{id}/ocr` (`{"all_pages": true}` pour relire aussi les pages qui ont
+  une couche texte). Utile après l'installation d'une langue. Les documents déjà indexés avant
+  ce lot gardent leur lecture : relancez l'OCR ou `cli reindex` (qui lit les pages numérisées
+  dans le processus de la commande).
+- **Sans Tesseract** : l'application démarre, les documents texte s'indexent ; les pages
+  numérisées sont signalées comme non lues et les images importées échouent avec un message
+  explicite. Tesseract est détecté au démarrage de chaque processus : après installation,
+  redémarrez `worker`, `worker-ocr` et `api`.
+- **Matériel** : mesuré sur un poste de développement à 2 vCPU (Tesseract 4.1, anglais) :
+  environ 5 s par page A4 à 300 dpi (détection d'orientation comprise), moins de 200 Mo de
+  mémoire par processus ; une page retournée dont l'orientation est incertaine est lue deux
+  fois. Prévoyez davantage avec deux langues (`fra+eng`). Pour de gros volumes de scans, augmentez
+  `OCR_WORKER_CONCURRENCY` (un processus par cœur disponible, sans prendre les cœurs de l'API
+  et du worker par défaut) ou lancez plusieurs services `worker-ocr`. Un document OCR est
+  limité à 6 h au total.
+- Développement : `start.sh` / `start.bat` lancent les deux workers ; Tesseract s'installe avec
+  `apt install tesseract-ocr tesseract-ocr-fra tesseract-ocr-osd` (Windows : installeur UB
+  Mannheim, `tesseract` dans le `PATH`).
+
+## 7. Exploitation courante
 
 | Tâche | Commande |
 |---|---|
-| Journaux | `docker compose logs -f api worker` (format JSON avec `LOG_FORMAT=json`) |
+| Journaux | `docker compose logs -f api worker worker-ocr` (format JSON avec `LOG_FORMAT=json`) |
 | Créer / promouvoir un administrateur | `docker compose exec api entrypoint.sh cli create-admin --email x@client.fr` |
 | Vérifier l'intégrité du journal d'audit | `docker compose exec api entrypoint.sh cli verify-audit` |
 | Appliquer les durées de conservation | automatique chaque nuit (service `beat`), ou `… cli purge` |
@@ -162,7 +205,7 @@ vérification de bout en bout sont décrites dans `deploy/litellm/README.md`.
 | Mesurer la qualité sur un corpus | `docker compose exec api entrypoint.sh eval --dataset … --collection …` |
 | Supervision | `GET /api/ready` (sonde), `GET /metrics` sur le réseau interne (Prometheus) |
 
-## 7. Sauvegarde et restauration
+## 8. Sauvegarde et restauration
 
 ```bash
 ./scripts/backup.sh /srv/backups/contexthub          # base (pg_dump) + documents + sommes SHA-256
@@ -173,7 +216,7 @@ Planifiez la sauvegarde (cron ou timer systemd) et copiez-la hors de l'hôte. Te
 restauration à chaque montée de version majeure. Après restauration, vérifiez l'intégrité du
 journal d'audit.
 
-## 8. Mise à jour
+## 9. Mise à jour
 
 ```bash
 ./scripts/backup.sh
@@ -184,14 +227,14 @@ Une évolution du découpage (par exemple le découpage des définitions point p
 s'applique qu'aux documents importés ensuite. Pour en faire profiter les documents déjà
 indexés : `docker compose exec api entrypoint.sh cli reindex [--collection NOM]`.
 
-## 9. Mise à niveau depuis une version antérieure à la v1
+## 10. Mise à niveau depuis une version antérieure à la v1
 
 La v1 change le stockage des passages indexés (table `hub_chunks`, découpage par article). Les
 documents importés avant la v1 apparaissent en échec avec le message « Document importé avant la
 v1 » : supprimez-les puis réimportez-les. Les anciennes tables `langchain_pg_*` peuvent être
 supprimées une fois la réimportation terminée.
 
-## 10. Dimensionnement indicatif
+## 11. Dimensionnement indicatif
 
 Mesures sur le corpus MiFID II / MiFIR / EMIR (272 pages, 1 240 passages) :
 

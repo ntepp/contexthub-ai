@@ -51,6 +51,7 @@ from src.auth.users import create_local_user  # noqa: E402
 from src.db.models import ROLE_ADMIN, ROLE_MEMBER, Base  # noqa: E402
 from src.db.session import SessionLocal, configure_engine, get_engine  # noqa: E402
 from src.llm import llm_chain  # noqa: E402
+from src.ocr import registry as ocr_registry  # noqa: E402
 from src.retrieval import embeddings as embeddings_module  # noqa: E402
 from src.retrieval import store as store_module  # noqa: E402
 from src.workers.celery_app import celery_app  # noqa: E402
@@ -87,6 +88,7 @@ def _environment():
     store_module.set_store_override(None)
     embeddings_module.set_embeddings_override(None)
     llm_chain.set_llm_override(None)
+    ocr_registry.set_ocr_engine_override(None)
 
 
 @pytest.fixture

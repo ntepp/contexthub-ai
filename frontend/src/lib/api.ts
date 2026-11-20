@@ -81,10 +81,30 @@ export interface StoredDocument {
   warnings: string[]
   chunk_count: number
   page_count: number
+  /** How the text was read (ADR-003); null until indexed. "partial": see `ocr_low_pages`. */
+  read_mode: ReadMode | null
+  /** Pages whose text comes from OCR. */
+  ocr_pages: number
+  /** Mean OCR confidence of those pages, 0-100. */
+  ocr_confidence: number | null
+  /** Badly read or unread pages (1-based). */
+  ocr_low_pages: number[]
+  /** PDF or image with its original file: OCR can be run again. */
+  ocr_eligible: boolean
   progress: { current: number; total: number }
   has_file: boolean
   created_at: string | null
   indexed_at: string | null
+}
+
+export type ReadMode = 'native' | 'ocr' | 'partial'
+
+/** Formats read by OCR, shown page by page through `documentPageUrl` (browsers cannot all show TIFF). */
+export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.tif', '.tiff']
+
+export function isImageFile(filename: string): boolean {
+  const name = filename.toLowerCase()
+  return IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext))
 }
 
 export interface Source {
@@ -314,7 +334,11 @@ export const api = {
     http.post<StoredDocument>(`/collections/${collectionId}/documents/url`, { url }).then((r) => r.data),
   deleteDocument: (id: string) => http.delete(`/documents/${id}`),
   reindexDocument: (id: string) => http.post<StoredDocument>(`/documents/${id}/reindex`).then((r) => r.data),
+  rerunOcr: (id: string, allPages = false) =>
+    http.post<StoredDocument>(`/documents/${id}/ocr`, { all_pages: allPages }).then((r) => r.data),
   documentFileUrl: (id: string, page?: number | null) => `/api/documents/${id}/file${page ? `#page=${page}` : ''}`,
+  /** One page of an imported image (TIFF frame) as PNG. */
+  documentPageUrl: (id: string, page?: number | null) => `/api/documents/${id}/pages/${page && page > 0 ? page : 1}`,
 
   // chat
   /** Loaded once per session and shared (sidebar, chat): see `forgetModels()`. */
@@ -420,8 +444,15 @@ export interface SystemCheck {
   models?: string[]
   /** Gateway only: whether consumption can be read (admin key configured). */
   consumption?: boolean
-  /** Gateway only: configuration remarks in French, shown even when `ok` is true. */
+  /** Configuration remarks in French (gateway, workers, OCR), shown even when `ok` is true. */
   notes?: string[]
+  /** OCR only. */
+  enabled?: boolean
+  available?: boolean
+  engine?: string | null
+  version?: string | null
+  languages?: string[]
+  configured_languages?: string[]
 }
 
 export interface SystemStatus {
@@ -433,7 +464,16 @@ export interface SystemStatus {
     models: Model[]
     embedding: { provider: string; model: string }
     retrieval: { max_distance: number; top_k: number; candidates: number; hybrid: boolean; reranker: string }
-    ocr: { enabled: boolean; available: boolean }
+    ocr: {
+      enabled: boolean
+      available: boolean
+      languages?: string
+      min_page_chars?: number
+      min_confidence?: number
+      dpi?: number
+      page_timeout_seconds?: number
+      worker_concurrency?: number
+    }
     url_ingestion: boolean
     sso: boolean
     retention_days: { audit: number; conversations: number }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, FileText, X } from 'lucide-react'
-import { api, type Source } from '@/lib/api'
+import { api, isImageFile, type Source } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Dialog } from '@/components/ui/Dialog'
 
@@ -108,7 +108,15 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
       >
         {viewing && (
           <div className="space-y-3">
-            {viewing.filename.toLowerCase().endsWith('.pdf') ? (
+            {isImageFile(viewing.filename) ? (
+              <div className="max-h-[72vh] overflow-auto rounded border border-rule bg-wash">
+                <img
+                  src={api.documentPageUrl(viewing.document_id, viewing.page)}
+                  alt={`${viewing.filename}, page ${viewing.page ?? 1} (document numérisé)`}
+                  className="mx-auto block max-w-full"
+                />
+              </div>
+            ) : viewing.filename.toLowerCase().endsWith('.pdf') ? (
               <iframe
                 title={`${viewing.filename}, page ${viewing.page ?? 1}`}
                 src={api.documentFileUrl(viewing.document_id, viewing.page)}
@@ -121,7 +129,11 @@ export function SourcePanel({ sources, active, onSelect, onClose }: Props) {
             )}
             <a
               className="btn-secondary"
-              href={api.documentFileUrl(viewing.document_id, viewing.page)}
+              href={
+                isImageFile(viewing.filename)
+                  ? api.documentPageUrl(viewing.document_id, viewing.page)
+                  : api.documentFileUrl(viewing.document_id, viewing.page)
+              }
               target="_blank"
               rel="noreferrer"
             >
