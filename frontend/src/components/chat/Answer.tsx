@@ -84,6 +84,8 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
                       onClick={() => onCite(n)}
                       className={cn(
                         'mx-0.5 inline-flex h-5 min-w-5 -translate-y-0.5 items-center justify-center rounded px-1 align-middle font-sans text-xs font-semibold transition-colors',
+                        // Touch screens: a 40 px hit area around the chip, without moving the text.
+                        "max-md:relative max-md:after:absolute max-md:after:-inset-2.5 max-md:after:content-['']",
                         activeSource === n ? 'bg-ledger text-white' : 'bg-ledger-soft text-ledger hover:bg-ledger hover:text-white',
                       )}
                       aria-label={`Voir la source ${n}`}
@@ -135,7 +137,7 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
           <span className="ml-auto flex gap-1">
             <button
               onClick={() => sendFeedback(1)}
-              className={cn('rounded p-1 hover:bg-wash', feedback === 1 ? 'text-ledger' : 'text-faint')}
+              className={cn('rounded p-1 hover:bg-wash max-md:p-2.5', feedback === 1 ? 'text-ledger' : 'text-faint')}
               aria-label="Réponse utile"
               aria-pressed={feedback === 1}
             >
@@ -143,7 +145,7 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
             </button>
             <button
               onClick={() => sendFeedback(-1)}
-              className={cn('rounded p-1 hover:bg-wash', feedback === -1 ? 'text-danger' : 'text-faint')}
+              className={cn('rounded p-1 hover:bg-wash max-md:p-2.5', feedback === -1 ? 'text-danger' : 'text-faint')}
               aria-label="Réponse incorrecte ou incomplète"
               aria-pressed={feedback === -1}
             >

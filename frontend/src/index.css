@@ -16,8 +16,19 @@
     height: 100%;
   }
 
+  /* The dynamic viewport height follows the mobile browser bars (and, with
+     interactive-widget=resizes-content, the virtual keyboard), so the composer stays visible. */
+  @supports (height: 100dvh) {
+    #root {
+      height: 100dvh;
+    }
+  }
+
   body {
     @apply bg-paper text-ink font-sans antialiased;
+    /* viewport-fit=cover: keep the content clear of a notch in landscape. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   :focus-visible {
@@ -42,6 +53,8 @@
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    /* Touch screens: at least 40 px for every button, icon buttons included. */
+    @apply max-md:min-h-10 max-md:min-w-10;
   }
   .btn-primary {
     @apply btn bg-ledger text-white hover:bg-ledger-dark;
@@ -57,6 +70,8 @@
   }
   .input {
     @apply w-full rounded-md border border-rule bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-ledger focus:outline-none;
+    /* 16 px on phones: iOS zooms into any field written smaller. */
+    @apply max-md:text-base;
   }
   .label {
     @apply mb-1 block text-sm font-medium text-ink;
@@ -68,7 +83,7 @@
     @apply border-b border-rule px-3 py-2.5 text-sm align-top;
   }
   .answer {
-    @apply font-serif text-answer text-ink;
+    @apply break-words font-serif text-answer text-ink;
   }
   .answer p {
     @apply mb-3 last:mb-0;
@@ -84,5 +99,67 @@
   }
   .answer strong {
     @apply font-semibold;
+  }
+}
+
+/* A list table shown as one card per row on phones (below md): the header row is kept for screen
+   readers, each cell with a data-label shows that label beside its value. Desktop is untouched. */
+@media (max-width: 767.98px) {
+  table.table-cards,
+  .table-cards > tbody,
+  .table-cards > tbody > tr,
+  .table-cards > tbody > tr > td {
+    display: block;
+  }
+  table.table-cards {
+    background: transparent;
+  }
+  .table-cards > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .table-cards > tbody > tr {
+    margin-bottom: 0.75rem;
+    border: 1px solid theme('colors.rule');
+    border-radius: 0.5rem;
+    background: theme('colors.surface');
+    padding: 0.5rem 0.75rem;
+  }
+  .table-cards > tbody > tr > td {
+    max-width: none;
+    border: 0;
+    padding: 0.375rem 0;
+    text-align: left;
+  }
+  .table-cards > tbody > tr > td:empty {
+    display: none;
+  }
+  .table-cards > tbody > tr > td[data-label] {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    column-gap: 0.75rem;
+    align-items: baseline;
+  }
+  .table-cards > tbody > tr > td[data-label]::before {
+    content: attr(data-label);
+    font-size: 0.75rem;
+    line-height: 1.1rem;
+    color: theme('colors.slate');
+  }
+  .table-cards > tbody > tr > td[data-label] > * {
+    grid-column: 2;
+  }
+  /* Row actions: a separate band at the bottom of the card. */
+  .table-cards > tbody > tr > td[data-cell='actions'] {
+    margin-top: 0.25rem;
+    border-top: 1px solid theme('colors.rule');
+    padding-top: 0.5rem;
+  }
+  .table-cards > tbody > tr > td[data-cell='actions']:has(> :only-child:empty) {
+    display: none;
   }
 }

@@ -6,6 +6,7 @@ import { formatDateTime } from '@/lib/utils'
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
 import { BudgetDialog, type BudgetTarget } from '@/components/usage/BudgetDialog'
 import { Notice } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 export function Users() {
   const { user: me } = useAuth()
@@ -41,7 +42,7 @@ export function Users() {
 
   return (
     <section>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between max-md:flex-wrap max-md:gap-3">
         <p className="text-sm text-slate">
           Les comptes SSO sont créés automatiquement à la première connexion. Créez ici les comptes à mot de passe.
         </p>
@@ -53,82 +54,90 @@ export function Users() {
       {error && <Notice tone="error" className="mb-4">{error}</Notice>}
       {deleted && <Notice tone="success" className="mb-4">{deleted}</Notice>}
 
-      <table className="w-full border-collapse bg-surface">
-        <thead>
-          <tr>
-            <th className="table-head">Utilisateur</th>
-            <th className="table-head">Rôle</th>
-            <th className="table-head">Connexion</th>
-            <th className="table-head">Dernière connexion</th>
-            <th className="table-head">Statut</th>
-            <th className="table-head" />
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u) => (
-            <tr key={u.id} className={u.is_active ? '' : 'text-faint'}>
-              <td className="table-cell">
-                <p className="font-medium">{u.full_name || u.email}</p>
-                {u.full_name && <p className="text-xs text-slate">{u.email}</p>}
-              </td>
-              <td className="table-cell">
-                <select
-                  className="rounded border border-rule bg-surface px-1.5 py-1 text-sm"
-                  value={u.role}
-                  disabled={u.id === me?.id}
-                  onChange={(e) => update(u, { role: e.target.value as Role })}
-                  aria-label={`Rôle de ${u.email}`}
-                >
-                  <option value="member">Membre</option>
-                  <option value="admin">Administrateur</option>
-                </select>
-              </td>
-              <td className="table-cell text-slate">{u.auth_provider === 'oidc' ? 'SSO' : 'Mot de passe'}</td>
-              <td className="table-cell text-slate">{formatDateTime(u.last_login_at)}</td>
-              <td className="table-cell">{u.is_active ? 'Actif' : 'Désactivé'}</td>
-              <td className="table-cell">
-                {/* Wraps on narrow screens (1024 px) rather than pushing the table off the page. */}
-                <div className="flex flex-wrap justify-end gap-1">
-                  {gatewayMode && (
-                    <button
-                      className="btn-ghost px-2 py-1 text-xs"
-                      onClick={() => setBudgetOf({ id: u.id, label: u.full_name || u.email })}
-                      aria-label={`Budget de ${u.full_name || u.email}`}
-                      title="Plafond de dépense appliqué par la passerelle LLM"
-                    >
-                      <Wallet size={14} />
-                      Budget
-                    </button>
-                  )}
-                  {u.id !== me?.id && (
-                    <>
-                      {u.auth_provider === 'local' && (
-                        <button
-                          className="btn-ghost px-2 py-1 text-xs"
-                          onClick={async () => {
-                            const r = await api.resetPassword(u.id)
-                            setSecret({ email: u.email, password: r.temporary_password })
-                          }}
-                          title="Générer un mot de passe temporaire"
-                        >
-                          <KeyRound size={14} />
-                          Réinitialiser
-                        </button>
-                      )}
-                      <button className="btn-ghost px-2 py-1 text-xs" onClick={() => update(u, { is_active: !u.is_active })}>
-                        {u.is_active ? 'Désactiver' : 'Réactiver'}
-                      </button>
-                      <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(u)}>
-                        Supprimer
-                      </button>
-                    </>
-                  )}
-                </div>
-              </td>
+      <TableScroll>
+        <table className="table-cards w-full border-collapse bg-surface">
+          <thead>
+            <tr>
+              <th className="table-head">Utilisateur</th>
+              <th className="table-head">Rôle</th>
+              <th className="table-head">Connexion</th>
+              <th className="table-head">Dernière connexion</th>
+              <th className="table-head">Statut</th>
+              <th className="table-head" />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id} className={u.is_active ? '' : 'text-faint'}>
+                <td className="table-cell">
+                  <p className="font-medium">{u.full_name || u.email}</p>
+                  {u.full_name && <p className="text-xs text-slate">{u.email}</p>}
+                </td>
+                <td className="table-cell" data-label="Rôle">
+                  <select
+                    className="max-w-full rounded border border-rule bg-surface px-1.5 py-1 text-sm max-md:py-1.5 max-md:text-base"
+                    value={u.role}
+                    disabled={u.id === me?.id}
+                    onChange={(e) => update(u, { role: e.target.value as Role })}
+                    aria-label={`Rôle de ${u.email}`}
+                  >
+                    <option value="member">Membre</option>
+                    <option value="admin">Administrateur</option>
+                  </select>
+                </td>
+                <td className="table-cell text-slate" data-label="Connexion">
+                  {u.auth_provider === 'oidc' ? 'SSO' : 'Mot de passe'}
+                </td>
+                <td className="table-cell text-slate" data-label="Dernière connexion">
+                  {formatDateTime(u.last_login_at)}
+                </td>
+                <td className="table-cell" data-label="Statut">
+                  {u.is_active ? 'Actif' : 'Désactivé'}
+                </td>
+                <td className="table-cell" data-cell="actions">
+                  {/* Wraps on narrow screens (1024 px) rather than pushing the table off the page. */}
+                  <div className="flex flex-wrap justify-end gap-1 max-md:justify-start">
+                    {gatewayMode && (
+                      <button
+                        className="btn-ghost px-2 py-1 text-xs"
+                        onClick={() => setBudgetOf({ id: u.id, label: u.full_name || u.email })}
+                        aria-label={`Budget de ${u.full_name || u.email}`}
+                        title="Plafond de dépense appliqué par la passerelle LLM"
+                      >
+                        <Wallet size={14} />
+                        Budget
+                      </button>
+                    )}
+                    {u.id !== me?.id && (
+                      <>
+                        {u.auth_provider === 'local' && (
+                          <button
+                            className="btn-ghost px-2 py-1 text-xs"
+                            onClick={async () => {
+                              const r = await api.resetPassword(u.id)
+                              setSecret({ email: u.email, password: r.temporary_password })
+                            }}
+                            title="Générer un mot de passe temporaire"
+                          >
+                            <KeyRound size={14} />
+                            Réinitialiser
+                          </button>
+                        )}
+                        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => update(u, { is_active: !u.is_active })}>
+                          {u.is_active ? 'Désactiver' : 'Réactiver'}
+                        </button>
+                        <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(u)}>
+                          Supprimer
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
       <BudgetDialog target={budgetOf} onClose={() => setBudgetOf(null)} />
 

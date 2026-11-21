@@ -4,6 +4,7 @@ import { api, errorMessage, type Connection, type ConnectorKind } from '@/lib/ap
 import { formatDateTime } from '@/lib/utils'
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
 import { Notice } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 type TestResult = { id: string; ok: boolean; message: string }
 
@@ -45,7 +46,7 @@ export function Connections() {
 
   return (
     <section>
-      <div className="mb-4 flex items-start justify-between gap-6">
+      <div className="mb-4 flex items-start justify-between gap-6 max-md:flex-col max-md:gap-3">
         <p className="max-w-2xl text-sm text-slate">
           Un connecteur permet aux utilisateurs de joindre des pages Confluence ou Notion à une conversation, par lien
           ou par recherche. Rien n'est copié en masse : seules les pages choisies sont lues, puis supprimées avec la
@@ -62,54 +63,64 @@ export function Connections() {
       {connections.length === 0 ? (
         <Notice>Aucune connexion configurée. Ajoutez-en une pour proposer « Joindre des pages » dans le chat.</Notice>
       ) : (
-        <table className="w-full border-collapse bg-surface">
-          <thead>
-            <tr>
-              <th className="table-head">Connexion</th>
-              <th className="table-head">Type</th>
-              <th className="table-head">Adresse</th>
-              <th className="table-head">Modifiée</th>
-              <th className="table-head">Statut</th>
-              <th className="table-head" />
-            </tr>
-          </thead>
-          <tbody>
-            {connections.map((c) => (
-              <tr key={c.id} className={c.is_enabled ? '' : 'text-faint'}>
-                <td className="table-cell">
-                  <p className="font-medium">{c.name}</p>
-                  {c.account && <p className="text-xs text-slate">{c.account}</p>}
-                  {result?.id === c.id && (
-                    <p className={`mt-1 text-xs ${result.ok ? 'text-ledger-dark' : 'text-danger'}`} role="status">
-                      {result.message}
-                    </p>
-                  )}
-                </td>
-                <td className="table-cell">{c.kind_label}</td>
-                <td className="table-cell text-slate">{c.base_url ?? 'api.notion.com'}</td>
-                <td className="table-cell text-slate">{formatDateTime(c.updated_at ?? null)}</td>
-                <td className="table-cell">{c.is_enabled ? 'Active' : 'Désactivée'}</td>
-                <td className="table-cell">
-                  <div className="flex justify-end gap-1">
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => test(c)} disabled={testing === c.id}>
-                      <PlugZap size={14} />
-                      {testing === c.id ? 'Test en cours…' : 'Tester'}
-                    </button>
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(c)}>
-                      Modifier
-                    </button>
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => toggle(c)}>
-                      {c.is_enabled ? 'Désactiver' : 'Réactiver'}
-                    </button>
-                    <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(c)}>
-                      Supprimer
-                    </button>
-                  </div>
-                </td>
+        <TableScroll>
+          <table className="table-cards w-full border-collapse bg-surface">
+            <thead>
+              <tr>
+                <th className="table-head">Connexion</th>
+                <th className="table-head">Type</th>
+                <th className="table-head">Adresse</th>
+                <th className="table-head">Modifiée</th>
+                <th className="table-head">Statut</th>
+                <th className="table-head" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {connections.map((c) => (
+                <tr key={c.id} className={c.is_enabled ? '' : 'text-faint'}>
+                  <td className="table-cell">
+                    <p className="font-medium">{c.name}</p>
+                    {c.account && <p className="text-xs text-slate">{c.account}</p>}
+                    {result?.id === c.id && (
+                      <p className={`mt-1 text-xs ${result.ok ? 'text-ledger-dark' : 'text-danger'}`} role="status">
+                        {result.message}
+                      </p>
+                    )}
+                  </td>
+                  <td className="table-cell" data-label="Type">
+                    {c.kind_label}
+                  </td>
+                  <td className="table-cell text-slate max-md:break-all" data-label="Adresse">
+                    {c.base_url ?? 'api.notion.com'}
+                  </td>
+                  <td className="table-cell text-slate" data-label="Modifiée">
+                    {formatDateTime(c.updated_at ?? null)}
+                  </td>
+                  <td className="table-cell" data-label="Statut">
+                    {c.is_enabled ? 'Active' : 'Désactivée'}
+                  </td>
+                  <td className="table-cell" data-cell="actions">
+                    <div className="flex justify-end gap-1 max-md:flex-wrap max-md:justify-start">
+                      <button className="btn-ghost px-2 py-1 text-xs" onClick={() => test(c)} disabled={testing === c.id}>
+                        <PlugZap size={14} />
+                        {testing === c.id ? 'Test en cours…' : 'Tester'}
+                      </button>
+                      <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(c)}>
+                        Modifier
+                      </button>
+                      <button className="btn-ghost px-2 py-1 text-xs" onClick={() => toggle(c)}>
+                        {c.is_enabled ? 'Désactiver' : 'Réactiver'}
+                      </button>
+                      <button className="btn-ghost px-2 py-1 text-xs text-danger" onClick={() => setToDelete(c)}>
+                        Supprimer
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {editing && (

@@ -4,6 +4,7 @@ import { api, errorMessage, type AuditEvent } from '@/lib/api'
 import { cn, formatDateTime } from '@/lib/utils'
 import { formatBudgetWindow } from '@/lib/usage'
 import { Notice } from '@/components/ui/Notice'
+import { TableScroll } from '@/components/ui/TableScroll'
 
 const ACTIONS: [string, string][] = [
   ['', 'Toutes les actions'],
@@ -137,7 +138,7 @@ export function Audit() {
   return (
     <section>
       <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div>
+        <div className="max-md:basis-full">
           <label className="label" htmlFor="au-action">
             Type d'action
           </label>
@@ -149,19 +150,19 @@ export function Audit() {
             ))}
           </select>
         </div>
-        <div>
+        <div className="max-md:min-w-0 max-md:flex-1">
           <label className="label" htmlFor="au-start">
             Du
           </label>
           <input id="au-start" type="date" className="input" value={start} onChange={(e) => (setOffset(0), setStart(e.target.value))} />
         </div>
-        <div>
+        <div className="max-md:min-w-0 max-md:flex-1">
           <label className="label" htmlFor="au-end">
             Au
           </label>
           <input id="au-end" type="date" className="input" value={end} onChange={(e) => (setOffset(0), setEnd(e.target.value))} />
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex gap-2 max-md:ml-0 max-md:w-full max-md:flex-wrap">
           <button
             className="btn-secondary"
             onClick={() => api.verifyAudit().then(setVerify).catch((e) => setError(errorMessage(e)))}
@@ -185,43 +186,54 @@ export function Audit() {
         </Notice>
       )}
 
-      <table className="w-full border-collapse bg-surface">
-        <thead>
-          <tr>
-            <th className="table-head w-44">Date</th>
-            <th className="table-head">Qui</th>
-            <th className="table-head">Action</th>
-            <th className="table-head">Objet</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((e) => (
-            <Fragment key={e.id}>
-              <tr className="cursor-pointer hover:bg-wash" onClick={() => setOpen(open === e.id ? null : e.id)}>
-                <td className="table-cell whitespace-nowrap text-slate">{formatDateTime(e.ts)}</td>
-                <td className="table-cell">{e.actor_email ?? 'Système'}</td>
-                <td className={cn('table-cell', e.outcome !== 'success' && 'text-danger')}>
-                  {ACTION_LABELS[e.action] ?? e.action}
-                  {e.outcome === 'failure' && ' (échec)'}
-                  {e.outcome === 'denied' && ' (refusé)'}
-                </td>
-                <td className="table-cell max-w-md truncate text-slate">{summary(e)}</td>
-              </tr>
-              {open === e.id && (
-                <tr>
-                  <td colSpan={4} className="border-b border-rule bg-wash px-3 py-3">
-                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs leading-relaxed">
-                      {JSON.stringify({ ...e.details, ip: e.ip, empreinte: e.hash }, null, 2)}
-                    </pre>
+      <TableScroll>
+        <table className="table-cards w-full border-collapse bg-surface">
+          <thead>
+            <tr>
+              <th className="table-head w-44">Date</th>
+              <th className="table-head">Qui</th>
+              <th className="table-head">Action</th>
+              <th className="table-head">Objet</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((e) => (
+              <Fragment key={e.id}>
+                <tr className="cursor-pointer hover:bg-wash" onClick={() => setOpen(open === e.id ? null : e.id)}>
+                  <td className="table-cell whitespace-nowrap text-slate">{formatDateTime(e.ts)}</td>
+                  <td className="table-cell max-md:break-all" data-label="Qui">
+                    {e.actor_email ?? 'Système'}
+                  </td>
+                  <td className={cn('table-cell', e.outcome !== 'success' && 'text-danger')} data-label="Action">
+                    <span>
+                      {ACTION_LABELS[e.action] ?? e.action}
+                      {e.outcome === 'failure' && ' (échec)'}
+                      {e.outcome === 'denied' && ' (refusé)'}
+                    </span>
+                  </td>
+                  <td className="table-cell max-w-md truncate text-slate" data-label="Objet">
+                    {/* Phones: the whole text over three lines at most, rather than one cut line. */}
+                    {summary(e) && (
+                      <span className="max-md:line-clamp-3 max-md:whitespace-normal max-md:break-words">{summary(e)}</span>
+                    )}
                   </td>
                 </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+                {open === e.id && (
+                  <tr className="max-md:-mt-2.5 max-md:rounded-t-none max-md:border-t-0">
+                    <td colSpan={4} className="border-b border-rule bg-wash px-3 py-3">
+                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs leading-relaxed max-md:break-all">
+                        {JSON.stringify({ ...e.details, ip: e.ip, empreinte: e.hash }, null, 2)}
+                      </pre>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
-      <div className="mt-4 flex items-center justify-between text-sm text-slate">
+      <div className="mt-4 flex items-center justify-between text-sm text-slate max-md:flex-wrap max-md:gap-2">
         <span>{total.toLocaleString('fr-FR')} événements</span>
         <div className="flex gap-2">
           <button className="btn-secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
