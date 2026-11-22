@@ -10,6 +10,7 @@ import pytest
 
 from src.config import get_settings, reset_settings_cache
 from src.retrieval import rerank
+from tests.fakes import FakeTorch
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ def fake_sentence_transformers(monkeypatch):
                 raise OSError("not in cache")
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=CrossEncoder))
+    monkeypatch.setitem(sys.modules, "torch", FakeTorch())
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     rerank._cross_encoder.cache_clear()
     yield calls

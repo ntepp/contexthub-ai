@@ -60,6 +60,9 @@ class RetrievedChunk:
     chunk_index: int | None = None
     # Set on a passage joined to the context for being next to a kept one (that one's id).
     neighbour_of: uuid.UUID | None = None
+    # Cross-encoder score (RERANKER=cross_encoder; higher = more relevant), None when the
+    # passage was not re-ranked. ``score`` keeps the fused score.
+    rerank_score: float | None = None
 
 
 class ChunkStore(Protocol):

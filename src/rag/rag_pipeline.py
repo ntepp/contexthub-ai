@@ -13,6 +13,9 @@
 * ``generate`` answers from numbered sources and must cite them as ``[n]``. A
   refusal from the LLM is normalised to the exact ``NO_ANSWER_TEXT`` sentence and
   drops the sources, so the UI never shows citations for a non-answer.
+
+Each node records its duration in ``timings`` (re-ranking: seconds and pairs, within
+``retrieve`` and ``plan``); one ``[timing]`` log line per answer sums them up.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, StateGraph
@@ -38,7 +41,7 @@ from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHU
 from src.rag import retrieval
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import RetrievedChunk
-from src.utils.logging_config import get_logger
+from src.utils.logging_config import get_logger, request_id_var
 
 log = get_logger()
 
@@ -103,6 +106,15 @@ def no_answer_text() -> str:
     return get_settings().no_answer_text
 
 
+def _add_timings(left: dict[str, float] | None, right: dict[str, float] | None) -> dict[str, float]:
+    """Durations and counts written by the nodes, summed per key (re-ranking runs in
+    ``retrieve`` and again in ``plan``)."""
+    total = dict(left or {})
+    for key, value in (right or {}).items():
+        total[key] = total.get(key, 0) + value
+    return total
+
+
 class State(TypedDict, total=False):
     question: str
     history: list[tuple[str, str]]
@@ -120,6 +132,8 @@ class State(TypedDict, total=False):
     sources: list[dict]
     confidence_metric: float
     refused: bool
+    # Seconds per step (condense, retrieve, plan, generate, rerank) and re-ranking pairs.
+    timings: Annotated[dict[str, float], _add_timings]
 
 
 @dataclass
@@ -283,12 +297,12 @@ def _spec(state: State) -> ModelSpec:
     return parse_model_id(state["model_id"])
 
 
-async def _search(
-    query: str, collection_ids: list[uuid.UUID], references: list[str] | None = None
-) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
-    """(all candidates, grounded top-k) for one query."""
-    found = await retrieval.search(query, collection_ids, references)
-    return [c.chunk for c in found.candidates], found.kept
+def _rerank_timings(found: Sequence[retrieval.Retrieval]) -> dict[str, float]:
+    return {
+        "rerank": sum(f.rerank_seconds for f in found),
+        "rerank_pairs": sum(f.rerank_pairs for f in found),
+        "rerank_scored": sum(f.rerank_scored for f in found),
+    }
 
 
 def _references(state: State) -> list[str]:
@@ -310,7 +324,8 @@ async def condense(state: State) -> dict:
     history = state.get("history") or []
     question = state["question"]
     if not history:
-        return {"standalone_question": question}
+        return {"standalone_question": question, "timings": {"condense": 0.0}}
+    started = time.perf_counter()
     turns = history[-2 * get_settings().history_turns :]
     transcript = "\n".join(
         f"{'User' if role == 'user' else 'Assistant'}: {content[:1500]}" for role, content in turns
@@ -320,7 +335,7 @@ async def condense(state: State) -> dict:
     rewritten = (response.content if isinstance(response.content, str) else str(response.content)).strip()
     rewritten = rewritten.splitlines()[0].strip() if rewritten else ""
     log.info("[condense] %r -> %r", question, rewritten)
-    return {"standalone_question": rewritten or question}
+    return {"standalone_question": rewritten or question, "timings": {"condense": time.perf_counter() - started}}
 
 
 async def retrieve(state: State) -> dict:
@@ -328,8 +343,10 @@ async def retrieve(state: State) -> dict:
     query = state.get("standalone_question") or state["question"]
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
 
+    started = time.perf_counter()
     found = await retrieval.retrieve_context(query, collection_ids, _references(state))
     results, kept = [c.chunk for c in found.candidates], found.kept
+    timings = {"retrieve": time.perf_counter() - started, **_rerank_timings([found])}
 
     log.info(
         "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
@@ -355,6 +372,7 @@ async def retrieve(state: State) -> dict:
             "sources": [],
             "confidence_metric": 0.0,
             "refused": True,
+            "timings": timings,
         }
     if len(found.context) > len(kept):
         log.info("[retrieve] %d passage(s) voisin(s) joint(s) au contexte", len(found.context) - len(kept))
@@ -366,6 +384,7 @@ async def retrieve(state: State) -> dict:
         "sources": build_sources(found.context),
         "confidence_metric": confidence_from(kept),
         "refused": False,
+        "timings": timings,
     }
 
 
@@ -376,6 +395,7 @@ async def plan(state: State) -> dict:
         RAG_RETAINED_CHUNKS.observe(len(state.get("context") or []))
         return {}
     question = state.get("standalone_question") or state["question"]
+    started = time.perf_counter()
     llm = initialize_model_llm(_spec(state), user_id=state.get("user_id"), step="plan")
     response = await llm.ainvoke(
         [HumanMessage(PLAN_PROMPT.format(max_queries=settings.agentic_max_queries, question=question))]
@@ -385,13 +405,20 @@ async def plan(state: State) -> dict:
     if len(queries) == 1:
         log.info("[plan] une seule recherche suffit")
         RAG_RETAINED_CHUNKS.observe(len(state["context"]))
-        return {}
+        return {"timings": {"plan": time.perf_counter() - started}}
 
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
     # Sub-queries keep the question's product references, even when the planner drops them.
     references = _references(state)
-    extra = await asyncio.gather(*(_search(q, collection_ids, references) for q in queries[1:]))
-    rankings = [state.get("anchors") or state["context"]] + [kept for _, kept in extra]
+    # The sub-queries share what the question left of RERANK_MAX_PAIRS: planning never
+    # multiplies the cost of re-ranking.
+    limit = retrieval.sub_query_rerank_limit(
+        int((state.get("timings") or {}).get("rerank_pairs", 0)), len(queries) - 1
+    )
+    extra = await asyncio.gather(
+        *(retrieval.search(q, collection_ids, references, rerank_limit=limit) for q in queries[1:])
+    )
+    rankings = [state.get("anchors") or state["context"]] + [found.kept for found in extra]
     merged = interleave(rankings, settings.retrieval_top_k)
     vector = await asyncio.to_thread(get_embeddings().embed_query, question)
     context = await retrieval.expand(merged, vector, collection_ids)
@@ -408,6 +435,7 @@ async def plan(state: State) -> dict:
         "context": context,
         "sources": build_sources(context),
         "confidence_metric": confidence_from(merged),
+        "timings": {"plan": time.perf_counter() - started, **_rerank_timings(extra)},
     }
 
 
@@ -420,21 +448,23 @@ async def generate(state: State) -> dict:
         HumanMessage(f"Sources:\n\n{format_sources(state['context'])}\n\nQuestion: {state['question']}"),
     ]
     llm = initialize_model_llm(spec, user_id=state.get("user_id"), step="generate")
-    started = time.time()
+    started = time.perf_counter()
     full = ""
     async for chunk in llm.astream(messages):
         content = chunk.content if isinstance(chunk.content, str) else "".join(
             part.get("text", "") for part in chunk.content if isinstance(part, dict)
         )
         full += content
-    log.info("[generate] model=%s — %d caracteres en %.2fs", spec.id, len(full), time.time() - started)
+    elapsed = time.perf_counter() - started
+    log.info("[generate] model=%s — %d caracteres en %.2fs", spec.id, len(full), elapsed)
+    timings = {"generate": elapsed}
 
     if is_refusal(full):
-        return {"answer": no_answer_text(), "sources": [], "refused": True}
+        return {"answer": no_answer_text(), "sources": [], "refused": True, "timings": timings}
 
     cited = cited_indices(full)
     sources = [dict(s, cited=s["index"] in cited) for s in state["sources"]]
-    return {"answer": full.strip(), "sources": sources, "refused": False}
+    return {"answer": full.strip(), "sources": sources, "refused": False, "timings": timings}
 
 
 def _build_graph():
@@ -467,11 +497,30 @@ async def _initial_state(question, collection_ids, history, model_id, user_id=No
     return state
 
 
-def _result(state: dict, started: float) -> RAGResult:
+def log_timings(state: dict, latency: float, first_token: float | None = None) -> None:
+    """One ``[timing]`` line per answer: duration of each step, re-ranking pairs."""
+    timings = state.get("timings") or {}
+    parts = [f"total={latency:.2f}s"]
+    if first_token is not None:
+        parts.append(f"first_token={first_token:.2f}s")
+    parts += [f"{step}={timings[step]:.2f}s" for step in ("condense", "retrieve", "plan", "generate") if step in timings]
+    pairs, scored = int(timings.get("rerank_pairs", 0)), int(timings.get("rerank_scored", 0))
+    parts += [
+        f"rerank={timings.get('rerank', 0.0):.2f}s",
+        f"rerank_pairs={pairs}",
+        f"rerank_cached={pairs - scored}",
+        f"queries={len(state.get('search_queries') or [])}",
+        f"refused={'yes' if state.get('refused') else 'no'}",
+    ]
+    log.info("[timing] request=%s %s", request_id_var.get() or "-", " ".join(parts))
+
+
+def _result(state: dict, started: float, first_token: float | None = None) -> RAGResult:
     latency = round(time.time() - started, 2)
     refused = bool(state.get("refused"))
     RAG_QUERIES.labels("refused" if refused else "answered").inc()
     RAG_LATENCY.observe(latency)
+    log_timings(state, latency, first_token)
     return RAGResult(
         answer=state.get("answer") or no_answer_text(),
         sources=state.get("sources") or [],
@@ -481,6 +530,7 @@ def _result(state: dict, started: float) -> RAGResult:
         model=state["model_id"],
         standalone_question=state.get("standalone_question") or state["question"],
         search_queries=state.get("search_queries") or [],
+        extra={"timings": dict(state.get("timings") or {})},
     )
 
 
@@ -501,6 +551,11 @@ async def answer_question(
     return _result(state, started)
 
 
+# Steps announced to the chat stream ({"type": "status", "step": …}); "rerank" comes from
+# inside retrieve / plan (src/rag/retrieval.py) as a LangGraph custom event.
+STREAM_STEPS = ("condense", "retrieve", "rerank", "plan", "generate")
+
+
 async def stream_answer(
     question: str,
     collection_ids: Sequence[uuid.UUID | str],
@@ -508,18 +563,28 @@ async def stream_answer(
     model_id: str | None = None,
     user_id: uuid.UUID | str | None = None,
 ) -> AsyncIterator[dict]:
-    """Yield ``{"type": "token", "content"}`` events, then one ``{"type": "result", ...}``.
+    """Yield ``{"type": "status", "step"}`` and ``{"type": "token", "content"}`` events, then
+    one ``{"type": "result", ...}``.
 
-    Only tokens produced by the ``generate`` node are forwarded — the ``condense``
-    node also calls the LLM and its output must not reach the user. When retrieve
+    Only tokens produced by the ``generate`` node are forwarded — the ``condense`` and
+    ``plan`` nodes also call the LLM and their output must not reach the user. When retrieve
     short-circuits, generate never calls the LLM, so the refusal is emitted from the
     retrieve end event, otherwise the UI would render an empty bubble.
+
+    ``status`` events say which step is running (``STREAM_STEPS``), so that the UI shows
+    progress while nothing is written yet. They are never part of the answer, and none
+    follows a short-circuited refusal. ``condense`` is announced only when there is a
+    history to read, ``plan`` only when agentic retrieval is on.
     """
+    settings = get_settings()
     started = time.time()
+    first_token: float | None = None
     initial = await _initial_state(question, collection_ids, history, model_id, user_id)
+    planning = settings.agentic_retrieval and settings.agentic_max_queries >= 2
+    answered = False  # the short-circuited refusal was emitted: nothing more to announce
     final_state: dict | None = None
     async for event in graph().astream_events(initial, version="v2"):
-        kind = event["event"]
+        kind, name = event["event"], event.get("name")
         node = (event.get("metadata") or {}).get("langgraph_node")
         if kind == "on_chat_model_stream" and node == "generate":
             chunk = event["data"]["chunk"]
@@ -527,16 +592,28 @@ async def stream_answer(
                 part.get("text", "") for part in chunk.content if isinstance(part, dict)
             )
             if content:
+                if first_token is None:
+                    first_token = time.time() - started
                 yield {"type": "token", "content": content}
-        elif kind == "on_chain_end" and event.get("name") == "retrieve":
+        elif kind == "on_chain_start" and name in STREAM_STEPS and node == name:
+            skipped = (name == "condense" and not initial["history"]) or (name == "plan" and not planning)
+            if not answered and not skipped:
+                yield {"type": "status", "step": name}
+        elif kind == "on_custom_event" and name == "status":
+            step = (event.get("data") or {}).get("step")
+            if not answered and step in STREAM_STEPS:
+                yield {"type": "status", "step": step}
+        elif kind == "on_chain_end" and name == "retrieve":
             output = event["data"].get("output") or {}
             if output.get("answer"):
+                answered = True
+                first_token = time.time() - started
                 yield {"type": "token", "content": output["answer"]}
-        elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+        elif kind == "on_chain_end" and name == "LangGraph":
             final_state = event["data"].get("output")
     if final_state is None:  # pragma: no cover - defensive
         raise RuntimeError("Le graphe RAG n'a pas produit d'état final.")
-    yield {"type": "result", **_result(final_state, started).as_dict()}
+    yield {"type": "result", **_result(final_state, started, first_token).as_dict()}
 
 
 async def create_and_run_graph(

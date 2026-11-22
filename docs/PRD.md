@@ -119,7 +119,7 @@ que le produit leur soit réservé.
 | QA-7 | Choix du modèle parmi une liste autorisée par l'administrateur ; indication claire « local » / « cloud » | Must |
 | QA-8 | Réponses en streaming | Must |
 | QA-9 | Retour utilisateur 👍 / 👎 sur chaque réponse | Should |
-| QA-10 | Re-ranking optionnel (cross-encoder) | Could |
+| QA-10 | Re-ranking optionnel (cross-encoder), au coût borné : seuls les `RERANK_CANDIDATES` premiers candidats d'une recherche sont re-classés, au plus `RERANK_MAX_PAIRS` paires par réponse (question et sous-requêtes du planificateur ensemble), sur GPU quand il y en a un | Could |
 | QA-11 | Contexte métier configurable par instance (`ASSISTANT_CONTEXT`), sans jamais lever les règles d'ancrage | Should |
 | QA-13 | Références produit : identifiants de modèle extraits de chaque document (y compris la notation factorisée `US30010/15/20/30/40CNG` → US30010CNG … US30040CNG), conservés sur le document et en tête de ses passages ; une question qui cite une référence favorise les documents qui la portent et écarte les passages d'un autre produit ; si toutes les sources concernent un autre produit, la réponse le dit (refus `NO_ANSWER_TEXT` suivi de la mention des produits trouvés, sans appel au LLM) ; sans effet pour une question sans référence. Générique, aucune règle propre à un fabricant | Should |
 | QA-14 | Passages voisins : autour de chaque passage retenu, les passages adjacents du même document et de la même section (pages voisines) rejoignent le contexte, dans un budget configurable (`RETRIEVAL_NEIGHBOURS`, `RETRIEVAL_CONTEXT_CHARS`), pour qu'une procédure sur plusieurs pages soit lue entière ; ils ne décident jamais de l'ancrage | Should |
@@ -171,6 +171,7 @@ que le produit leur soit réservé.
 | NFR-6 | **Reproductibilité** — dépendances épinglées |
 | NFR-7 | **Langue** — interface en français ; réponses dans la langue de la question |
 | NFR-8 | **Performance** — première réponse en streaming < 5 s sur GPU 8 Go avec llama3.1:8b ; ingestion d'un PDF de 150 pages < 3 min |
+| NFR-10 | **Latence perçue et robustesse du flux** — une réponse en streaming n'est jamais muette plus de `SSE_HEARTBEAT_SECONDS` (10 s) : étape en cours affichée sous la question, battement SSE pendant la préparation, pour qu'aucun proxy (Cloudflare coupe après ~100 s de silence, nginx après `proxy_read_timeout`) ne coupe une réponse longue ; durée de chaque étape journalisée par réponse (`[timing]`, avec l'identifiant de requête) |
 
 ### 5.3 Hors périmètre v1
 
@@ -244,6 +245,28 @@ bge-m3), détail et méthode dans [evaluation.md](evaluation.md) :
 Le score de pertinence des sources ne sépare pas les réponses justes des fausses : il n'est pas
 affiché aux utilisateurs (décision issue de la mesure).
 
+### Re-classement sur CPU, calcul équivalent (2026-11-22)
+
+Sans accès à HuggingFace dans la VM de développement, le vrai modèle n'a pas pu être chargé. Mesure
+de substitution : un encodeur aux dimensions de `bge-reranker-v2-m3` (XLM-RoBERTa large : 24 couches,
+1 024, 16 têtes, FFN 4 096), poids aléatoires, numpy/OpenBLAS en float32, sur les 2 vCPU de la VM
+(hôte AMD Ryzen 7 4800H). Mêmes produits matriciels que le modèle réel, mais ni PyTorch ni le vrai
+modèle : un ordre de grandeur, pas une mesure du produit.
+
+| Jetons par paire (question + passage) | Secondes par paire (2 vCPU) |
+|---|---|
+| 128 | 1,1 |
+| 256 | 2,6 |
+| 320 | 3,5 |
+| 512 | 5,2 |
+
+Un passage de 800 à 1 200 caractères fait environ 250 à 400 jetons : sur ces 2 vCPU, 30 paires
+prennent de l'ordre de 1 min 30 à 2 min, 60 paires le double ; une machine à 8 cœurs devrait diviser
+ces temps par 3 à 4 (non mesuré). Le coût croît avec chaque paire : d'où les bornes
+`RERANK_CANDIDATES` / `RERANK_MAX_PAIRS`, et sur CPU des valeurs réduites ou pas de re-classement
+(voir [deployment.md](deployment.md)). Le nombre de paires notées lors de la recette à 398 s n'était
+pas journalisé ; il l'est désormais (`[timing] … rerank_pairs=`).
+
 ### Manuels techniques, récupération seule (2026-11-22)
 
 Jeu `golden_manuals.json` (recette Nitram), mesuré sans LLM dans la VM de développement
@@ -288,7 +311,7 @@ la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_sca
 | DOC-1 à DOC-10 | ✅ | PDF/DOCX/TXT/MD/HTML (+ images, voir DOC-2), dédup SHA-256, découpage par article, suppressions, idempotence, URL anti-SSRF, limites, actes européens |
 | QA-1 à QA-9 | ✅ | Hybride, refus court-circuité, citations `[n]`, visionneuse à la page, conversations + reformulation, liste blanche de modèles avec alerte cloud, streaming, retours 👍/👎 |
 | QA-12 Recherche agentique | ✅ | Nœud `plan` après `retrieve` : décomposition en sous-requêtes (`AGENTIC_MAX_QUERIES`), recherches en parallèle, fusion par alternance ; requêtes lancées renvoyées par l'API et inscrites au journal d'audit |
-| QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`), non mesuré |
+| QA-10 Re-ranking | 🟡 | Implémenté en option (`RERANKER=cross_encoder`, `requirements-rerank.txt`). **Borné depuis la recette du 22/11/2026** (398 s pour une réponse sur CPU portable : tous les candidats éligibles re-classés, pour la question puis pour chaque sous-requête) : `RERANK_CANDIDATES` (30) premiers candidats par recherche, `RERANK_MAX_PAIRS` (60) par réponse partagées entre la question et les sous-requêtes, cache des paires déjà notées, lots, mode inférence, CUDA automatique (`RERANKER_DEVICE`), `RERANKER_THREADS`, `RERANKER_MAX_LENGTH` (512) ; même budget dans `explain-retrieval` (score du cross-encoder affiché). Testé avec un faux cross-encoder qui compte les paires. **Non mesuré avec le vrai modèle** (pas d'accès à HuggingFace dans la VM) : calcul équivalent en §10, à confirmer sur GPU et sur le portable de recette |
 | LLM-1 à LLM-4 | ✅ | Ollama, Anthropic, OpenAI, endpoint compatible OpenAI (Mistral, vLLM) |
 | Passerelle LLM et consommation (ADR-001, lot 1) | ✅ | `LLM_GATEWAY_*` : tous les appels de modèle via une passerelle compatible OpenAI (LiteLLM), attribués à l'UUID de l'utilisateur et à l'étape ; modèles `gateway:<nom>` ; refus de la passerelle (budget 402, débit 429, indisponibilité 503/502) affichés dans le chat, encart « Budget atteint » ; pages *Ma consommation* (période, coût, requêtes, jetons, budget, évolution par jour, par modèle) et *Administration › Consommation* (par utilisateur, export CSV) lues à la passerelle, aucune donnée de coût stockée ; LiteLLM de développement (`deploy/litellm/`, profil compose `gateway`). Validé en recette le 21/11/2026 contre la passerelle LiteLLM réelle (consommation par utilisateur et globale) |
 | Modèles et budgets pilotés depuis l'administration (ADR-002, lot 2) | 🟡 | **Validé en recette le 21/11/2026 contre LiteLLM réel : un budget atteint bloque l'utilisateur. Reste à vérifier : l'accès aux modèles locaux une fois le budget atteint (comportement attendu à décider).** *Administration des modèles* : table `hub_settings` (migration `69ab4256`, absence signalée dans *Administration › Système*), `GET/PUT/DELETE /admin/models` (modèles proposés et modèle par défaut choisis dans le catalogue disponible : modèles servis par la passerelle, sinon `LLM_MODELS` ; priorité au réglage sur l'environnement ; état `available`/`unavailable`/`unknown` identique dans `/models` ; lien vers la console de la passerelle quand il est ouvrable depuis un navigateur), modèle retiré refusé par `/chat/ask` et `/chat/stream`, y compris pour une conversation existante. *Budgets par utilisateur* : `GET/PUT/DELETE /admin/users/{id}/budget` (jour, semaine, 30 jours ; devise de la passerelle), écrits à la passerelle sur un budget dédié `contexthub-<uuid>`, jamais de budget de console modifié (retrait refusé, 409) ; budgets dans `/admin/usage` (lecture bornée, échec partiel signalé) ; `LLM_GATEWAY_KIND` validé au démarrage. *Audit* : `settings.models_set`, `settings.models_reset`, `budget.set`, `budget.remove` (ancienne et nouvelle valeur dans la même forme, utilisateur visé par son UUID, aucune dépense), chaîne vérifiée. Écrans d'administration livrés par le développeur interface. Reste : essai de bout en bout avec la passerelle de développement (`deploy/litellm/`) et tests PostgreSQL |
@@ -306,6 +329,7 @@ la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_sca
 | NFR-7 Langue | ✅ | Interface en français |
 | NFR-9 Interface responsive (mobile, tablette) | ✅ | **Livrée (PR #10), vérifiée sur API simulée (360, 768, 1280 px) et validée en recette sur iPhone 14 Pro Max (Safari) le 21/11/2026. Chrome Android non testé.** Sous 768 px : barre supérieure (menu, titre de la page ou de la conversation, nouvelle question) et navigation en tiroir (dialogue Radix : piège de focus, Échap, clic extérieur, défilement bloqué) ; chat pleine largeur, saisie en bas (`100dvh`, zones de sécurité, champs en 16 px), sources en plein écran (feuille à droite sur tablette) ; listes principales en cartes (`table-cards`), autres tableaux défilant dans leur cadre (`TableScroll`) ; boutons d'au moins 40 px au toucher. Captures Playwright à 360, 768 et 1280 px : aucune page ne déborde horizontalement. Bureau (≥ 1024 px) inchangé, hormis les tableaux trop larges qui défilent désormais dans leur cadre et non plus avec toute la page. Non vérifié : Safari iOS et Chrome Android réels (clavier virtuel, encoche, PDF dans la visionneuse) |
 | NFR-8 Performance | ⚠️ | Ingestion : 25 s pour 148 pages ✅. Réponse : non mesurée sur matériel cible (69 s sur GPU portable 4 Go partagé) |
+| NFR-10 Latence perçue et flux | 🟡 | **Implémenté et testé (SQLite et doublures), non vérifié derrière Cloudflare ni sur l'installation de recette.** Événements `status` dans `/chat/stream` (condense, retrieve, rerank, plan, generate), commentaire `: ping` après `SSE_HEARTBEAT_SECONDS` de silence (pipeline consommé dans sa propre tâche ; émission en temps réel vérifiée avec uvicorn), étape affichée sous la question (« Recherche dans vos documents… », « Relecture des passages… », « Rédaction… » ; vérifié dans Chromium sur API simulée), ligne `[timing]` par réponse (total, premier jeton, condense, retrieve, plan, generate, re-classement en secondes et en paires). nginx de production : `proxy_buffering off`, `X-Accel-Buffering: no`, `proxy_read_timeout 300s`. `/chat/ask` (non diffusé) n'a pas de battement : derrière Cloudflare, une réponse de plus de 100 s y reste coupée |
 
 ## 12. Reste à faire avant la première vente
 
@@ -314,7 +338,7 @@ la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_sca
 | 🔴 | Faire rédiger CGV, contrat de support et DPA (sous-traitance RGPD) par un avocat | Fondateur |
 | 🔴 | Mesurer la latence sur le matériel cible (GPU 16 Go, llama3.1:8b / qwen) et publier la configuration recommandée | Technique |
 | 🟠 | Étendre le jeu de référence à 100 questions (avec des experts métier) ; atteindre ≥ 0,80 de score sémantique | Produit |
-| 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) | Technique |
+| 🟡 | Mesurer le re-classement (`RERANKER=cross_encoder`) avec le vrai modèle, sur GPU et sur CPU, et rejouer la question Nitram de la recette à travers le tunnel Cloudflare (ligne `[timing]`) | Technique |
 | 🟠 | Test d'intrusion externe avant le premier client bancaire | Fondateur |
 | 🟡 | Mentions légales, page de sécurité publique, modèle de devis et de contrat de support | Fondateur |
 | 🟡 | v1.1 : connecteur SharePoint, connexion aux connecteurs avec les droits de chaque utilisateur (OAuth), synchronisation SCIM, export du journal vers SIEM | Technique |

@@ -50,9 +50,9 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002); `69ab4257` = OCR quality on `hub_documents` (`read_mode`, `ocr_pages`, `ocr_confidence`, `ocr_low_pages`, ADR-003); `69ab4258` = `hub_documents.product_refs` |
 | `src/ingestion/` | `filetypes` (sniffing, image magic numbers), `loaders` (PDF with page-by-page OCR of poor pages — few characters or an unreadable text layer, `OCR_MIN_TEXT_QUALITY` — JPG/PNG/TIFF images, DOCX, TXT/MD, HTML; `OcrOptions`, `OcrRequired`), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries; technical documents: numbered sections "3.2.2", paragraphs, captions, `CHUNK_SIZE_TECHNICAL`; context title + product references head every passage), `references` (product references, factored ranges `US30010/15/20CNG`, matching), `layout` (running headers/footers, context title), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
-| `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
-| `src/rag/retrieval.py` | One retrieval code path for the `retrieve` node and `cli explain-retrieval`: `search()` (hybrid search, product references: search restricted to the documents carrying the question's reference + `RETRIEVAL_REFERENCE_BOOST`, threshold, rerank, other-product filter and notice, top-k, every candidate with its reason), `expand()` (neighbours), `retrieve_context()`, `describe()` |
-| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
+| `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional cross-encoder: first `limit` candidates only, pair cache, batches, `RERANKER_DEVICE` auto = CUDA if present, one scoring call at a time) |
+| `src/rag/retrieval.py` | One retrieval code path for the `retrieve` node and `cli explain-retrieval`: `search()` (hybrid search, product references: search restricted to the documents carrying the question's reference + `RETRIEVAL_REFERENCE_BOOST`, threshold, rerank within `rerank_limit`, other-product filter and notice, top-k, every candidate with its reason), `question_rerank_limit()` / `sub_query_rerank_limit()` (`RERANK_MAX_PAIRS` per answer), `expand()` (neighbours), `retrieve_context()`, `describe()` |
+| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()` (`status` + `token` events), `create_and_run_graph()` (by collection name); per-step `timings` in the state, one `[timing]` log line per answer |
 | `src/llm/factory.py` | `provider:model` ids; offered models = `hub_settings` key `models` if set (`model_offer()`, checked against `available_catalogue()`), else `LLM_MODELS` / gateway catalogue; Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/instance_settings.py` | `get` / `put` / `delete` of `hub_settings` (JSON per key), 5 s in-process cache (expires by itself: several workers), read errors fall back on the environment |
 | `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
@@ -86,6 +86,16 @@ docker compose up -d --build               # production stack (docker-compose.ya
 - Streaming forwards only tokens from the `generate` node (`condense` and `plan` also call the LLM). When retrieve
   short-circuits (refusal or product notice), the answer is emitted from the retrieve end event, else the UI
   shows an empty bubble.
+- `/chat/stream` contract: `meta`, then `status` events (`step` in `STREAM_STEPS`: condense — follow-ups
+  only —, retrieve, rerank, plan — agentic retrieval on —, generate) that are progress only, never part of
+  the answer, and never sent after a short-circuited refusal; `token`; `final` + `done` or `error`. An SSE
+  comment `: ping` goes out after `SSE_HEARTBEAT_SECONDS` of silence (proxies cut silent streams:
+  Cloudflare ~100 s); clients skip frames without a `data:` line. `with_heartbeat()` consumes the
+  pipeline in its own task: only the wait times out, never the work.
+- Re-ranking is bounded: per search, only the first `rerank_limit` eligible candidates (fused order) are
+  scored, the rest keeps its order behind them; per answer, at most `RERANK_MAX_PAIRS` pairs — the
+  question takes `min(RERANK_CANDIDATES, RERANK_MAX_PAIRS)`, the planner's sub-queries share what is
+  left. `rerank_score` is the cross-encoder's, `score` stays the fused one.
 - `plan` runs only after `retrieve` kept something for the question itself (refusals stay LLM-free); the
   question's own ranking always comes first in the merge and a bad planner reply falls back to it.
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
@@ -121,7 +131,9 @@ docker compose up -d --build               # production stack (docker-compose.ya
 (marker `pg`) migrates a real database from scratch. `tests/e2e/` (marker `e2e`) drives the running UI with
 Playwright: agentic retrieval, definition chunking and refusal on the HR corpus; connectors against
 `tests/e2e/mock_confluence.py`. Connector unit tests replace the remote systems with
-`registry.set_connector_factory_override()` or an `httpx.MockTransport`.
+`registry.set_connector_factory_override()` or an `httpx.MockTransport`. Re-ranking tests put `FakeTorch` and
+`FakeCrossEncoder` (`tests/fakes.py`, counts the pairs it scores) in `sys.modules`; heartbeat tests shorten
+`SSE_HEARTBEAT_SECONDS` and slow the embedding down (`tests/test_stream_progress.py`).
 
 On Windows use `127.0.0.1`, not `localhost`, for PostgreSQL/Redis: `localhost` can resolve to `::1`
 first and every connection then stalls for a minute.

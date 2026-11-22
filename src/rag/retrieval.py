@@ -16,6 +16,11 @@ all the question had, retrieval answers itself — the exact ``NO_ANSWER_TEXT`` 
 Documents without any reference are never left out for this reason. A question without a
 reference is searched exactly as before.
 
+Re-ranking (``RERANKER=cross_encoder``): only the ``RERANK_CANDIDATES`` first candidates the
+grounding threshold let through are re-ranked (``limit``), the others keep their fused order
+behind them; :func:`rerank_limits` shares ``RERANK_MAX_PAIRS`` between the question and the
+planner's sub-queries, so that one answer never scores more pairs than that.
+
 Neighbours: a procedure often runs over several passages and pages. Around each kept
 passage, the adjacent passages of the same document and section (``RETRIEVAL_NEIGHBOURS``
 on each side, pages next to each other) join the context, best-ranked passages first, within
@@ -34,9 +39,12 @@ from sqlalchemy import select
 
 from src.config import DEFAULT_PRODUCT_MISMATCH, get_settings
 from src.ingestion.references import matching, question_references
+from src.retrieval import rerank as reranker
 from src.retrieval.embeddings import get_embeddings
-from src.retrieval.rerank import rerank
 from src.retrieval.store import RetrievedChunk, get_store
+from src.utils.logging_config import get_logger
+
+log = get_logger()
 
 KEPT = "kept"
 EXCLUDED = "excluded"
@@ -72,6 +80,11 @@ class Retrieval:
     collection_ids: list[uuid.UUID] = field(default_factory=list)
     # Set when every passage the threshold let through is about another product: the answer.
     notice: str | None = None
+    # Re-ranking: candidates re-ranked (pairs), of which scored by the model (not cached).
+    rerank_limit: int = 0
+    rerank_pairs: int = 0
+    rerank_scored: int = 0
+    rerank_seconds: float = 0.0
 
     def ordered(self) -> list[Candidate]:
         """Kept candidates first, in context order, then the excluded ones in search order."""
@@ -126,13 +139,45 @@ def product_notice(found: Sequence[str], asked: Sequence[str]) -> str:
     return f"{settings.no_answer_text} {detail}"
 
 
+def question_rerank_limit() -> int:
+    """Candidates re-ranked for the question itself (chat ``retrieve`` node, diagnostic)."""
+    settings = get_settings()
+    return min(settings.rerank_candidates, settings.rerank_max_pairs)
+
+
+def sub_query_rerank_limit(used: int, sub_queries: int) -> int:
+    """Candidates re-ranked for each of ``sub_queries`` planned searches, once the question
+    used ``used`` pairs: what is left of ``RERANK_MAX_PAIRS``, shared equally, at most
+    ``RERANK_CANDIDATES`` each (below 2, the sub-queries keep their fused order)."""
+    settings = get_settings()
+    if sub_queries <= 0:
+        return 0
+    return max(0, min(settings.rerank_candidates, (settings.rerank_max_pairs - used) // sub_queries))
+
+
+async def _announce(step: str) -> None:
+    """Progress event for the chat stream (``{"type": "status", "step": …}``); a no-op
+    outside a LangGraph run (diagnostic, scripts)."""
+    try:
+        from langchain_core.callbacks.manager import adispatch_custom_event
+
+        await adispatch_custom_event("status", {"step": step})
+    except RuntimeError:
+        pass
+
+
 async def search(
-    query: str, collection_ids: Sequence[uuid.UUID], references: Sequence[str] | None = None
+    query: str,
+    collection_ids: Sequence[uuid.UUID],
+    references: Sequence[str] | None = None,
+    rerank_limit: int | None = None,
 ) -> Retrieval:
     """Hybrid search, product references, grounding threshold, optional re-ranking, product
     filter, top-k — with reasons. ``references``: the product references the question cites
-    (default: those found in ``query``; the planner passes the question's to its sub-queries)."""
+    (default: those found in ``query``; the planner passes the question's to its sub-queries).
+    ``rerank_limit``: candidates re-ranked (default :func:`question_rerank_limit`)."""
     settings = get_settings()
+    limit = question_rerank_limit() if rerank_limit is None else rerank_limit
     store = get_store()
     ids = list(collection_ids)
     vector = await asyncio.to_thread(get_embeddings().embed_query, query)
@@ -173,9 +218,19 @@ async def search(
         else:
             eligible.append(candidate)
 
-    order = {chunk.id: position for position, chunk in enumerate(
-        await asyncio.to_thread(rerank, query, [c.chunk for c in eligible])
-    )}
+    reranked = reranker.Reranked([c.chunk for c in eligible])
+    if reranker.enabled() and min(limit, len(eligible)) >= 2:
+        await _announce("rerank")
+        reranked = await asyncio.to_thread(reranker.rerank, query, [c.chunk for c in eligible], limit)
+        log.info(
+            "[rerank] %d paire(s) sur %d candidat(s) éligible(s) — %d notée(s), %d en cache, %.2fs",
+            reranked.pairs,
+            len(eligible),
+            reranked.scored,
+            reranked.cached,
+            reranked.seconds,
+        )
+    order = {chunk.id: position for position, chunk in enumerate(reranked.chunks)}
     eligible.sort(key=lambda c: order[c.chunk.id])
 
     notice = None
@@ -203,6 +258,10 @@ async def search(
         vector=vector,
         collection_ids=ids,
         notice=notice,
+        rerank_limit=limit if reranker.enabled() else 0,
+        rerank_pairs=reranked.pairs,
+        rerank_scored=reranked.scored,
+        rerank_seconds=reranked.seconds,
     )
 
 
@@ -277,7 +336,8 @@ async def expand(
 async def retrieve_context(
     query: str, collection_ids: Sequence[uuid.UUID], references: Sequence[str] | None = None
 ) -> Retrieval:
-    """What the ``retrieve`` node does: :func:`search`, then the neighbours of the kept passages."""
+    """What the ``retrieve`` node does: :func:`search` (question's re-ranking budget), then the
+    neighbours of the kept passages."""
     found = await search(query, collection_ids, references)
     if found.kept:
         found.context = await expand(found.kept, found.vector, found.collection_ids)
@@ -326,6 +386,7 @@ def describe(found: Retrieval, excerpt: int = 0) -> list[dict]:
             "lexical_rank": chunk.lexical_rank,
             "lexical_score": None if chunk.lexical_score is None else round(chunk.lexical_score, 4),
             "fused_score": round(chunk.score, 5),
+            "rerank_score": None if chunk.rerank_score is None else round(chunk.rerank_score, 4),
             "document": meta.get("filename"),
             "document_id": str(chunk.document_id),
             "page": meta.get("page"),

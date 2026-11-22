@@ -54,6 +54,16 @@ Ouvrez `PUBLIC_URL`, connectez-vous, puis *Administration › Système* : chaque
 Les cookies de session sont `Secure` : sans HTTPS de bout en bout, la connexion échoue. Pour un
 essai sans TLS uniquement : `COOKIE_SECURE=false`.
 
+**Réponses en streaming à travers un proxy.** `/api/chat/stream` est un flux Server-Sent Events.
+Pendant la préparation d'une réponse (recherche, re-classement, planification), l'API envoie un
+événement d'étape puis un commentaire `: ping` dès que `SSE_HEARTBEAT_SECONDS` (10 s) passent sans
+autre envoi : un proxy qui coupe les réponses muettes (Cloudflare au bout de ~100 s, un répartiteur de
+charge, un tunnel) ne coupe donc plus une réponse longue. Sur tout proxy placé devant ContextHub :
+pas de mise en tampon des réponses `text/event-stream` (l'API envoie `X-Accel-Buffering: no`, le
+nginx fourni a `proxy_buffering off`) et un délai d'inactivité nettement supérieur au battement
+(`proxy_read_timeout 300s` dans le nginx fourni). `/api/chat/ask` (réponse en un bloc) n'a pas de
+battement : derrière un tel proxy, préférez le flux pour les questions longues.
+
 ## 4. SSO (OpenID Connect)
 
 1. Chez le fournisseur d'identité, créez une application web avec l'URI de redirection
@@ -94,6 +104,40 @@ docker compose exec postgres psql -U contexthub -c "DROP INDEX ix_hub_chunks_emb
   CREATE INDEX ix_hub_chunks_embedding ON hub_chunks USING hnsw (embedding vector_cosine_ops);"
 docker compose exec api entrypoint.sh cli reindex
 ```
+
+### Re-classement (optionnel)
+
+`RERANKER=cross_encoder` re-classe les meilleurs candidats avec un cross-encoder local
+(`BAAI/bge-reranker-v2-m3`, 568 M paramètres, ~2,3 Go, rien ne sort du serveur). L'image Docker
+fournie ne l'embarque pas : installez `requirements-rerank.txt` (sentence-transformers et PyTorch)
+dans l'image de l'API, avec **PyTorch CUDA** sur un serveur à GPU NVIDIA (roue CUDA de PyTorch,
+NVIDIA Container Toolkit et réservation du GPU pour le service `api`, comme pour `ollama` dans
+`docker-compose.gpu.yaml`). Téléchargez le modèle une fois (`HF_HUB_OFFLINE=false`), puis passez
+`HF_HUB_OFFLINE=true`.
+
+Le coût croît avec chaque paire (question, passage) lue par le modèle ; il est borné :
+
+| Réglage | Défaut | Rôle |
+|---|---|---|
+| `RERANK_CANDIDATES` | 30 | Candidats re-classés par recherche (les meilleurs après fusion ; les autres gardent leur ordre derrière) |
+| `RERANK_MAX_PAIRS` | 60 | Paires par réponse : la question en prend jusqu'à `RERANK_CANDIDATES`, les sous-requêtes du planificateur se partagent le reste (sous 2 chacune, elles ne sont pas re-classées) |
+| `RERANKER_DEVICE` | `auto` | CUDA si PyTorch voit un GPU, sinon CPU ; ou `cpu`, `cuda:1`… |
+| `RERANKER_THREADS` | 0 | Threads CPU (0 : choix de PyTorch, un par cœur physique) ; à fixer dans un conteneur limité en CPU |
+| `RERANKER_BATCH_SIZE` | 16 | Paires par lot |
+| `RERANKER_MAX_LENGTH` | 512 | Jetons lus par paire (le modèle en accepte 8 192 ; 512 suffit aux passages de ContextHub) |
+
+Une paire déjà notée (même question, même passage) n'est pas renotée : une question reposée après
+une erreur réseau ne refait pas ce travail. Le journal de l'API indique au chargement le périphérique
+retenu et, pour chaque réponse, une ligne `[timing] request=… rerank=…s rerank_pairs=… rerank_cached=…`
+(avec les durées de `condense`, `retrieve`, `plan`, `generate` et du premier jeton) ;
+`python -m src.cli explain-retrieval` re-classe avec le même budget que la question du chat.
+
+**Ordre de grandeur.** Sur CPU, compter de l'ordre d'une à quelques secondes par paire selon la
+machine et la longueur des passages (calcul équivalent sur 2 vCPU : ~3,5 s par paire de 320 jetons ;
+PRD §10) : 30 paires coûtent alors de l'ordre de la minute. Sur CPU, réduisez les bornes
+(`RERANK_CANDIDATES=10`, `RERANK_MAX_PAIRS=10` : la question seule) ou laissez `RERANKER=none`. Sur
+GPU, le re-classement de 60 paires est attendu bien en dessous de la seconde — **non mesuré à ce
+jour**, à vérifier sur le matériel cible avec la ligne `[timing]`.
 
 ### Passerelle LLM
 
@@ -239,4 +283,6 @@ supprimées une fois la réimportation terminée.
 Mesures sur le corpus MiFID II / MiFIR / EMIR (272 pages, 1 240 passages) :
 
 - indexation : 25 s pour MiFID II (148 pages) avec bge-m3 sur GPU ;
-- réponse : dépend surtout du LLM et du GPU (voir [evaluation.md](evaluation.md)).
+- réponse : dépend surtout du LLM et du GPU (voir [evaluation.md](evaluation.md)) ; avec
+  `RERANKER=cross_encoder`, du re-classement (voir § 5, *Re-classement*), chaque étape étant
+  chiffrée par la ligne `[timing]` du journal de l'API.
