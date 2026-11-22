@@ -4,8 +4,13 @@
     python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --collection manuels
 
 Each question goes through the ``retrieve`` node of the pipeline — the very search,
-threshold and filters the chat uses — and nothing else: no reformulation, no planner,
-no LLM. What is measured is therefore what the model would be given to read.
+threshold, filters and neighbours the chat uses — and nothing else: no planner, no LLM. What
+is measured is therefore what the model would be given to read.
+
+``--rewrites FILE`` (JSON ``{"question id": ["rewording", ...]}``) also replays the ``plan``
+node with those rewordings, as if the planner had written them (a scripted stand-in replaces
+the LLM; sub-queries off): the rewording mechanism is measured with *given* rewordings, not
+with what a real LLM would write — the file says who wrote them.
 
 ``--corpus DIR`` indexes the files of DIR in an in-process SQLite database and an
 in-memory chunk store, with the configured embedding model and OCR, and leaves the
@@ -19,7 +24,10 @@ page_hit_span: any page a passage runs over, when the index records where it end
 search kept, neighbours aside (reciprocal rank),
 share of passages from documents about another product (``product_documents`` in the
 dataset), size of the context, and how the question ended at retrieval (refused without
-LLM, refused with a product notice, or passed to the LLM).
+LLM, refused with a product notice, or passed to the LLM). Also: share of the expected pages
+the context covers (page_recall), expected section among the context's (section_hit, from
+``reference_article``), and — for questions with ``expected_steps`` — share of the steps whose
+terms the context contains (steps_in_context: what a complete procedure answer needs to read).
 """
 
 from __future__ import annotations
@@ -102,6 +110,7 @@ def score(question: dict, state: dict, no_answer: str) -> dict:
         "answerable": bool(question["answerable"]),
         "passages": len(context),
         "context_chars": sum(len(c.content) for c in context),
+        "rewrites": state.get("search_rewrites") or [],
         "outcome": "refused" if answer.strip() == no_answer.strip()
         else "notice" if answer.startswith(no_answer.strip())
         else "llm",
@@ -114,6 +123,9 @@ def score(question: dict, state: dict, no_answer: str) -> dict:
         row["page_hit"] = any(not pages or _page_of(c) in pages for c in expected)
         # Passages that start on an earlier page and run over an expected one (page_end).
         row["page_hit_span"] = any(_covers(c, pages) for c in expected)
+        if pages:
+            covered = {page for page in pages if any(_covers(c, {page}) for c in expected)}
+            row["page_recall"] = round(len(covered) / len(pages), 4)
         # Rank among the passages the search kept (neighbours joined around them excluded).
         ranked = state.get("anchors") or context
         rank = next(
@@ -126,6 +138,19 @@ def score(question: dict, state: dict, no_answer: str) -> dict:
         )
         row["first_rank"] = rank
         row["reciprocal_rank"] = round(1.0 / rank, 4) if rank else 0.0
+    if question.get("reference_article") and question.get("answerable"):
+        from eval.harness.metrics import article_hit
+
+        sections = [{"section": (c.metadata or {}).get("section"), "section_path": (c.metadata or {}).get("section_path")}
+                    for c in context]
+        row["section_hit"] = bool(article_hit(sections, question["reference_article"]))
+    steps = question.get("expected_steps")
+    if steps:
+        from eval.harness.metrics import steps_found
+
+        found = steps_found(steps, "\n".join(c.content for c in context))
+        row["steps_in_context"] = round(sum(found) / len(found), 4)
+        row["steps_missing"] = [step.get("label") for step, ok in zip(steps, found, strict=True) if not ok]
     if product_docs is not None and context:
         row["other_product_share"] = round(sum(1 for n in names if n not in product_docs) / len(context), 3)
     refs = question.get("expected_notice_refs")
@@ -152,6 +177,9 @@ def aggregate(rows: list[dict]) -> dict:
         "doc_hit": _rate(r.get("doc_hit") for r in answerable),
         "page_hit": _rate(r.get("page_hit") for r in answerable),
         "page_hit_span": _rate(r.get("page_hit_span") for r in answerable),
+        "page_recall": _mean(r.get("page_recall") for r in answerable),
+        "section_hit": _rate(r.get("section_hit") for r in answerable),
+        "steps_in_context": _mean(r.get("steps_in_context") for r in answerable),
         "mrr": _mean(r.get("reciprocal_rank") for r in answerable),
         "other_product_share": _mean(r.get("other_product_share") for r in rows),
         "context_chars_mean": _mean(r["context_chars"] for r in rows),
@@ -161,35 +189,77 @@ def aggregate(rows: list[dict]) -> dict:
 
 
 def format_table(rows: list[dict]) -> str:
-    lines = [f"{'id':7} {'doc':>4} {'page':>4} {'rang':>4} {'autre':>6} {'pass.':>5} {'car.':>6}  issue"]
+    lines = [
+        f"{'id':7} {'doc':>4} {'page':>4} {'pages':>5} {'sect.':>5} {'étap.':>5} {'rang':>4} {'autre':>6} "
+        f"{'pass.':>5} {'car.':>6}  issue"
+    ]
     for r in rows:
         doc = "" if "doc_hit" not in r else ("oui" if r["doc_hit"] else "NON")
         page = "" if "page_hit" not in r else ("oui" if r["page_hit"] else "NON")
         rank = r.get("first_rank") or ""
         other = "" if r.get("other_product_share") is None else f"{r['other_product_share']:.2f}"
+        recall = "" if r.get("page_recall") is None else f"{r['page_recall']:.2f}"
+        section = "" if "section_hit" not in r else ("oui" if r["section_hit"] else "NON")
+        steps = "" if r.get("steps_in_context") is None else f"{r['steps_in_context']:.2f}"
         lines.append(
-            f"{r['id']:7} {doc:>4} {page:>4} {rank!s:>4} {other:>6} {r['passages']:>5} {r['context_chars']:>6}  {r['outcome']}"
+            f"{r['id']:7} {doc:>4} {page:>4} {recall:>5} {section:>5} {steps:>5} {rank!s:>4} {other:>6} "
+            f"{r['passages']:>5} {r['context_chars']:>6}  {r['outcome']}"
         )
     return "\n".join(lines)
 
 
-async def measure(dataset: dict, collection: str) -> list[dict]:
+def _scripted_planner(rewrites: list[str]):
+    """Stands in for the LLM in the ``plan`` node: replies with the given rewordings."""
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    return FakeListChatModel(responses=[json.dumps({"queries": [], "rewrites": rewrites}, ensure_ascii=False)])
+
+
+async def measure(dataset: dict, collection: str, rewrites: dict[str, list[str]] | None = None) -> list[dict]:
     from src.config import get_settings
     from src.db.models import Collection
     from src.db.session import session_scope
-    from src.rag.rag_pipeline import retrieve
+    from src.llm import llm_chain
+    from src.rag.rag_pipeline import plan, retrieve
 
     with session_scope() as db:
         col = db.query(Collection).filter(Collection.name == collection).first()
         if col is None:
             raise SystemExit(f"Collection « {collection} » introuvable.")
         collection_id = str(col.id)
-    no_answer = get_settings().no_answer_text
+    settings = get_settings()
+    no_answer = settings.no_answer_text
+    saved = settings.agentic_retrieval, settings.query_rewrite
+    if rewrites:
+        # The rewording mechanism alone: no sub-query (nothing would write them).
+        settings.agentic_retrieval, settings.query_rewrite = False, True
     rows = []
-    for question in dataset["questions"]:
-        state = await retrieve({"question": question["question"], "collection_ids": [collection_id]})
-        rows.append(score(question, state, no_answer))
+    try:
+        for question in dataset["questions"]:
+            state = await retrieve({"question": question["question"], "collection_ids": [collection_id]})
+            given = (rewrites or {}).get(question["id"])
+            if given:
+                previous = llm_chain._llm_override  # noqa: SLF001 - a caller may have set its own
+                llm_chain.set_llm_override(_scripted_planner(given))
+                try:
+                    state = {**state, **await plan({**state, "question": question["question"],
+                                                    "collection_ids": [collection_id], "model_id": "ollama:scripted"})}
+                finally:
+                    llm_chain.set_llm_override(previous)
+            rows.append(score(question, state, no_answer))
+    finally:
+        settings.agentic_retrieval, settings.query_rewrite = saved
     return rows
+
+
+def _settings_snapshot() -> dict:
+    from src.config import get_settings
+
+    settings = get_settings()
+    return {name: getattr(settings, name) for name in (
+        "retrieval_max_distance", "retrieval_top_k", "retrieval_candidates", "retrieval_hybrid", "reranker",
+        "retrieval_neighbours", "retrieval_neighbour_scope", "retrieval_context_chars",
+    )}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--collection", help="collection déjà indexée de la base configurée")
     parser.add_argument("--output", default="eval/results", help="dossier des rapports")
     parser.add_argument("--label", default="", help="libellé ajouté au nom du rapport")
+    parser.add_argument(
+        "--rewrites", type=Path,
+        help="JSON {id: [reformulation, ...]} rejouées par le nœud plan (LLM remplacé ; reformulations données)",
+    )
     parser.add_argument(
         "--explain", action="append", default=[], metavar="ID",
         help="afficher aussi le diagnostic de récupération (explain-retrieval) de cette question (répétable)",
@@ -219,7 +293,10 @@ def main(argv: list[str] | None = None) -> int:
 
         ingest_directory(collection, corpus)
 
-    rows = asyncio.run(measure(dataset, collection))
+    given = json.loads(args.rewrites.read_text(encoding="utf-8")) if args.rewrites else None
+    if given is not None:
+        given = {key: value for key, value in given.items() if not key.startswith("_")}
+    rows = asyncio.run(measure(dataset, collection, given))
     for question in (q for q in dataset["questions"] if q["id"] in args.explain):
         from src import cli
 
@@ -231,7 +308,9 @@ def main(argv: list[str] | None = None) -> int:
     run_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S") + (f"-{args.label}" if args.label else "")
     out = Path(args.output) / f"retrieval-{run_id}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"dataset": args.dataset, "summary": summary, "rows": rows}, indent=2, ensure_ascii=False))
+    settings = _settings_snapshot()
+    out.write_text(json.dumps({"dataset": args.dataset, "settings": settings, "rewrites": str(args.rewrites or ""),
+                               "summary": summary, "rows": rows}, indent=2, ensure_ascii=False))
     print(f"Rapport : {out}")
     return 0
 

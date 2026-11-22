@@ -1,0 +1,65 @@
+{
+  "_note": "Reformulations SIMULÉES, écrites à la main le 2026-11-22 par le développeur (pas par un LLM : aucun LLM réel dans la VM de mesure), dans le registre qu'un planificateur LLM emploierait — termes techniques, formels ou juridiques usuels du domaine. Le rédacteur avait lu les documents : il a évité d'en recopier les termes propres, mais ces reformulations ne sont pas aveugles et mesurent le mécanisme (recherche, fusion, seuil), pas la qualité des reformulations d'un vrai LLM. Usage : python -m eval.tools.measure_retrieval --dataset … --rewrites <ce fichier>.",
+  "RH01": [
+    "durée maximale de la période d'essai d'un cadre en contrat à durée indéterminée"
+  ],
+  "RH02": [
+    "délai de prévenance de l'employeur qui rompt la période d'essai après deux mois de présence"
+  ],
+  "RH03": [
+    "renouvellement de la période d'essai d'un contrat à durée déterminée"
+  ],
+  "RH04": [
+    "congé pour événement familial : durée du congé pour le décès du père d'un salarié"
+  ],
+  "RH05": [
+    "congés pour événement familial et congé de deuil en cas de décès d'un enfant"
+  ],
+  "RH06": [
+    "acquisition des congés payés : nombre de jours ouvrables par mois de travail effectif"
+  ],
+  "RH07": [
+    "durée maximale du congé principal pris en une seule fois"
+  ],
+  "RH08": [
+    "report des congés payés non pris en raison d'un arrêt maladie : période de report"
+  ],
+  "RH09": [
+    "délai de rétractation de la convention de rupture conventionnelle"
+  ],
+  "RH10": [
+    "délai d'instruction de la demande d'homologation de la rupture conventionnelle et homologation implicite"
+  ],
+  "RH11": [
+    "préavis de démission d'un salarié mensualisé en Alsace-Moselle"
+  ],
+  "RH12": [
+    "jour férié chômé obligatoire du 1er mai et rémunération du travail ce jour-là"
+  ],
+  "RH13": [
+    "refus du télétravail par l'employeur à un proche aidant sans accord collectif ni charte"
+  ],
+  "RH14": [
+    "durée maximale de la période d'essai d'un employé en contrat à durée indéterminée",
+    "rupture conventionnelle pendant la période d'essai"
+  ],
+  "RH15": [
+    "titres-restaurant du salarié en télétravail",
+    "journée de solidarité fixée le lundi de Pentecôte"
+  ],
+  "RH16": [
+    "congé pour événement familial en cas de mariage du salarié"
+  ],
+  "RH17": [
+    "barème kilométrique des frais professionnels pour l'utilisation du véhicule personnel"
+  ],
+  "RH18": [
+    "montant du salaire minimum interprofessionnel de croissance horaire brut en 2026"
+  ],
+  "RH19": [
+    "congé de naissance du père : durée du congé de paternité"
+  ],
+  "RH20": [
+    "calcul de l'indemnité légale de licenciement pour 10 ans d'ancienneté"
+  ]
+}

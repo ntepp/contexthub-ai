@@ -2,7 +2,7 @@ import csv
 import json
 from pathlib import Path
 
-from eval.harness.loader import load_golden_dataset, validate_dataset
+from eval.harness.loader import GoldenDataset, GoldenQuestion, load_golden_dataset, validate_dataset
 from eval.harness.metrics import (
     _fold,
     aggregate_results,
@@ -135,3 +135,33 @@ def test_report_files(tmp_path):
         rows = list(csv.DictReader(fh, delimiter=";"))
     assert list(rows[0].keys()) == CSV_COLUMNS
     assert len(rows) == 18
+
+
+def test_procedure_steps_are_scored_on_the_answer():
+    q = GoldenQuestion(
+        id="P1", category="procedure", question="Comment couper le signal ?", ground_truth="Accueil, Silence, Entrée.",
+        source_document="m.pdf", reference_article=None, answerable=True,
+        expected_steps=[{"label": "accueil", "terms": ["ACCUEIL", "HOME"]}, {"label": "silence", "terms": ["Mute"]}],
+    )
+    emb = HashEmbeddings()
+    full = score_question(q, {"answer": "1. Touche Accueil [1]. 2. Icône MUTE [2].", "sources": []},
+                          no_answer=DEFAULT_NO_ANSWER, embeddings=emb, threshold=0.75)
+    assert (full.steps_recall, full.steps_pass) == (1.0, True)
+    half = score_question(q, {"answer": "Appuyez sur HOME [1].", "sources": []},
+                          no_answer=DEFAULT_NO_ANSWER, embeddings=emb, threshold=0.75)
+    assert (half.steps_recall, half.steps_pass) == (0.5, False)
+    refused = score_question(q, {"answer": DEFAULT_NO_ANSWER, "sources": []},
+                             no_answer=DEFAULT_NO_ANSWER, embeddings=emb, threshold=0.75)
+    assert refused.steps_recall == 0.0
+    block = aggregate_results([full, half])["global"]
+    assert block["steps_recall_mean"] == 0.75 and block["steps_pass_rate"] == 0.5
+    assert "steps_recall_mean" not in aggregate_results(_responses())["global"]
+
+
+def test_expected_steps_are_validated():
+    base = {"id": "P", "category": "c", "question": "q", "ground_truth": "g", "source_document": "a.pdf",
+            "reference_article": None, "answerable": True}
+    good = GoldenQuestion(**base, expected_steps=[{"label": "a", "terms": ["x"]}])
+    bad = GoldenQuestion(**{**base, "id": "B"}, expected_steps=[{"label": "a", "terms": []}, "pas un dict"])
+    errors = validate_dataset(GoldenDataset(metadata={}, questions=[good, bad]), DEFAULT_NO_ANSWER)
+    assert len(errors) == 2 and all(e.startswith("B : étape attendue sans termes") for e in errors)
