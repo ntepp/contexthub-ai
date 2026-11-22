@@ -10,7 +10,10 @@
   searches — one per topic, document or step — runs the extra ones and merges the
   results so that every sub-question gets passages in the context. It only runs once
   ``retrieve`` found something, so an unanswerable question still costs no LLM call.
-* ``generate`` answers from numbered sources and must cite them as ``[n]``. A
+* ``generate`` answers from numbered sources and must cite them as ``[n]``; a "how to /
+  what to do" question is answered as numbered steps rebuilt from every relevant source,
+  interface elements named after their description in the sources, conditions and limits
+  stated and missing steps said (rule 7 of the system prompt). A
   refusal from the LLM is normalised to the exact ``NO_ANSWER_TEXT`` sentence and
   drops the sources, so the UI never shows citations for a non-answer.
 
@@ -59,7 +62,20 @@ Rules, in order of precedence:
 5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them.
 6. A source may start with the document it comes from and the product references it is about, in
    square brackets. When the question names a product, never apply to it a source about another
-   product; if no source is about the product named, say so."""
+   product; if no source is about the product named, say so.
+7. When the question asks how to do something or what to do (a procedure, an operation, a fix),
+   rebuild the procedure as numbered steps, in order, from every relevant source (a procedure
+   often runs over several consecutive sources, and the keys or icons it uses are often described
+   in another one). For each step:
+   - name the key, button, icon, indicator, menu, screen or form it uses as the sources name it;
+     when a source refers to it incompletely (an empty mark, "[icon]", a pictogram, "this
+     button") and another source describes it (a table or a legend of keys, icons or menus),
+     use the name and description given there;
+   - cite its sources.
+   Then state the conditions and limits the sources give (when the procedure applies, what it
+   does not cover). If the sources give only part of the procedure, give that part and say which
+   step they do not give; never fill it in.
+   Any other question gets a direct answer: do not turn a simple factual answer into a list."""
 
 
 def system_prompt() -> str:
