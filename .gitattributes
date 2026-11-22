@@ -1,3 +1,7 @@
+# Store text files with LF endings in the repository; a Windows checkout may still use CRLF
+# in the working tree without showing every file as modified.
+* text=auto
+
 # Files executed or parsed inside Linux containers must keep LF endings, whatever the
 # checkout platform (a CRLF entrypoint fails with "/bin/sh^M: not found").
 *.sh            text eol=lf
