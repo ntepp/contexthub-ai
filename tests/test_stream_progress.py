@@ -1,10 +1,11 @@
-"""/chat/stream: progress events and keep-alive comments while the answer is prepared,
-without changing what forms the answer."""
+"""/chat/stream: progress events and keep-alive comments while the answer is prepared, and
+one [timing] line per answer — without changing what forms the answer."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import time
 import types
@@ -208,3 +209,37 @@ def test_closing_the_stream_cancels_the_work():
 
     asyncio.run(client_goes_away())
     assert state["cancelled"] is True
+
+
+# --------------------------------------------------------------------------- timings
+
+
+@pytest.fixture
+def timing_log(caplog):
+    logger = logging.getLogger("contexthub")
+    level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="contexthub")
+    yield caplog
+    logger.removeHandler(caplog.handler)
+    logger.setLevel(level)
+
+
+def _timing_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("[timing]")]
+
+
+def test_one_timing_line_per_answer_with_the_request_id(member, indexed, timing_log):
+    resp = member.post("/chat/stream", json={"question": QUESTION}, headers={"X-Request-ID": "req-stream-1"})
+    assert resp.status_code == 200
+    member.post("/chat/ask", json={"question": OFF_TOPIC}, headers={"X-Request-ID": "req-ask-2"})
+    lines = _timing_lines(timing_log)
+    assert len(lines) == 2
+    streamed, refused = lines
+    assert streamed.startswith("[timing] request=req-stream-1 total=")
+    for field in ("first_token=", "condense=", "retrieve=", "plan=", "generate=", "rerank=", "rerank_pairs=0",
+                  "queries=1", "refused=no"):
+        assert field in streamed, field
+    assert refused.startswith("[timing] request=req-ask-2 ")
+    assert "refused=yes" in refused and "plan=" not in refused
