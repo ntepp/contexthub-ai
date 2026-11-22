@@ -8,6 +8,8 @@ Metrics
 - retrieval_hit: every expected document appears among the returned sources
 - article_hit: the expected article ("Article 2") — or, for corpora without articles, the
   expected section title ("Décès d'un proche") — appears in a *cited* source's section path
+- steps_recall / steps_pass (questions with ``expected_steps``): share of the expected steps
+  of a procedure the answer contains, each found by one of its terms; all of them
 - calibration: mean retrieval confidence of passing vs failing answers — if they are
   not separated, the confidence shown in the UI carries no information
 """
@@ -67,6 +69,13 @@ def _fold(text: str) -> str:
     return " ".join(ascii_text.lower().split())
 
 
+def steps_found(steps: list[dict], text: str) -> list[bool]:
+    """For each expected step, whether one of its ``terms`` appears in ``text`` (case, accents
+    and apostrophes ignored)."""
+    folded = _fold(text)
+    return [any(_fold(term) in folded for term in step.get("terms") or []) for step in steps]
+
+
 def article_hit(sources: list[dict], reference_article: str | None) -> bool | None:
     if not reference_article:
         return None
@@ -105,6 +114,8 @@ class QuestionResult:
     latency_seconds: float
     sources: list[dict] = field(default_factory=list)
     error: str | None = None
+    steps_recall: float | None = None
+    steps_pass: bool | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -125,6 +136,7 @@ def score_question(q: GoldenQuestion, response: dict, *, no_answer: str, embeddi
             semantic = 0.0
         else:
             semantic = round(cosine_similarity(embeddings.embed_query(predicted), embeddings.embed_query(q.ground_truth)), 4)
+        steps = steps_found(q.expected_steps, "" if refused else predicted) if q.expected_steps else None
         return QuestionResult(
             id=q.id,
             category=q.category,
@@ -141,6 +153,8 @@ def score_question(q: GoldenQuestion, response: dict, *, no_answer: str, embeddi
             confidence_metric=float(response.get("confidence_metric", 0.0) or 0.0),
             latency_seconds=float(response.get("latency_seconds", 0.0) or 0.0),
             sources=sources,
+            steps_recall=None if steps is None else round(sum(steps) / len(steps), 4),
+            steps_pass=None if steps is None else all(steps),
         )
     return QuestionResult(
         id=q.id,
@@ -212,6 +226,10 @@ def _block(results: list[QuestionResult]) -> dict:
                 "over_refusal_rate": _rate([r.over_refusal for r in answerable]),
             }
         )
+        with_steps = [r for r in answerable if r.steps_recall is not None]
+        if with_steps:
+            block["steps_recall_mean"] = _mean([r.steps_recall for r in with_steps])
+            block["steps_pass_rate"] = _rate([r.steps_pass for r in with_steps])
     return block
 
 

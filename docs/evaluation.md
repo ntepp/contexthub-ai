@@ -57,7 +57,7 @@ MiFID II (directive 2014/65/UE), MiFIR (règlement 600/2014), EMIR (règlement 6
 
 ### Jeu manuels techniques (recette Nitram)
 
-`eval/datasets/golden_manuals.json` (v1.0) reprend l'échec de recette du 2026-11 : à la question
+`eval/datasets/golden_manuals.json` (v1.1) reprend l'échec de recette du 2026-11 : à la question
 « j'ai une alarme sur mon onduleur Nitram US30010CNG qui bipe. comment eteindre le bip? »,
 ContextHub répondait avec la procédure du modèle US10000TSARM. Le corpus : le manuel
 US30010/15/20/30/40CNG (80 pages dont le texte est en images, lu par OCR), le manuel de la série
@@ -73,7 +73,11 @@ US10000TSARM (38 pages, texte natif) et sa fiche produit (2 pages).
 Champs propres à ce jeu : `expected_pages` (pages du **fichier PDF**, 1 = première page ; MAN01 :
 42-44, imprimées 32-34), `product_documents` (documents qui concernent le produit cité, pour
 mesurer la part de passages d'un autre produit), `expected_notice_refs` (référence que la mention
-« autre produit » doit nommer). Les documents appartiennent au fabricant : ni les PDF ni leur
+« autre produit » doit nommer), `expected_steps` (questions de procédure MAN01 et MAN09 : étapes et
+limites qu'une réponse complète doit contenir, chacune reconnue par l'un de ses `terms`, casse,
+accents et apostrophes ignorés ; MAN01 attend la touche ACCUEIL, les touches page précédente /
+suivante, l'icône Mute, la validation par ENTRÉE, la limite aux alarmes générales et l'exclusion de
+l'alarme continue). Les documents appartiennent au fabricant : ni les PDF ni leur
 texte ne sont versionnés, le jeu ne cite que des pages. Pour le rejouer, copiez les trois PDF
 dans `eval/corpora/manuals/` (ignoré par git) sous les noms de `metadata.corpus_files` ; l'outil
 de mesure vérifie leurs empreintes SHA-256 (même édition que celle qui a servi à écrire le jeu).
@@ -82,13 +86,22 @@ de mesure vérifie leurs empreintes SHA-256 (même édition que celle qui a serv
 
 `python -m eval.tools.measure_retrieval` fait passer chaque question par le nœud `retrieve` du
 pipeline — recherche, seuil, références produit, garde-fou, passages voisins — sans
-reformulation, sans planificateur, sans LLM : ce qui est mesuré est ce que le modèle aurait à
-lire. Utile quand aucun LLM n'est disponible, et pour isoler un problème de récupération d'un
-problème de génération.
+planificateur et sans LLM : ce qui est mesuré est ce que le modèle aurait à lire. Utile quand aucun
+LLM n'est disponible, et pour isoler un problème de récupération d'un problème de génération.
+
+`--rewrites FICHIER` (JSON `{"id de question": ["reformulation", …]}`) rejoue en plus le nœud
+`plan` avec ces reformulations, comme si le planificateur les avait écrites (un planificateur
+scripté remplace le LLM, sous-requêtes désactivées) : on mesure le **mécanisme** de reformulation
+(recherches, fusion RRF, seuil, voisins) avec des reformulations **données**, pas ce qu'écrirait un
+vrai LLM. `eval/datasets/rewrites/simulated_*.json` sont des reformulations écrites à la main pour
+la mesure du 2026-11-22 (le fichier le dit dans `_note`).
 
 ```bash
 # Corpus indexé en mémoire (base configurée intacte) avec le modèle d'embedding configuré et l'OCR
 python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --corpus eval/corpora/manuals
+# Même mesure, avec les reformulations simulées rejouées par le nœud plan
+python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --corpus eval/corpora/manuals \
+    --rewrites eval/datasets/rewrites/simulated_manuals.json
 # Collection déjà indexée de la base configurée (PostgreSQL), avec le diagnostic d'une question
 python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --collection "Manuel utilisateur" --explain MAN01
 ```
@@ -97,7 +110,12 @@ Par question : document attendu parmi les passages (`doc_hit`), page attendue pa
 document (`page_hit` : page de début, celle de la citation ; `page_hit_span` : toute page couverte
 par le passage), rang du premier bon passage parmi les passages retenus (voisins exclus, `mrr`),
 part de passages d'un autre produit, taille du contexte, issue (`refused` sans LLM, `notice` :
-refus avec mention du produit, `llm`). Rapport JSON dans `eval/results/retrieval-<horodatage>.json`.
+refus avec mention du produit, `llm`), part des pages attendues couvertes par le contexte
+(`page_recall`), section attendue (`reference_article`) parmi celles du contexte (`section_hit`),
+et, pour les questions qui ont des `expected_steps`, part des étapes dont un terme figure dans le
+contexte (`steps_in_context`, avec `steps_missing`) : de quoi rédiger la procédure complète.
+Rapport JSON dans `eval/results/retrieval-<horodatage>.json`, avec les réglages de récupération
+utilisés.
 
 Pour diagnostiquer une question sur la vraie base : `python -m src.cli explain-retrieval
 --collection "Manuel utilisateur" "la question"` (candidats, distance, rangs vecteur et plein
@@ -114,6 +132,7 @@ d'exclusion ; `--json`, `--excerpt 200`).
 | Bonne source | Tous les documents attendus figurent parmi les sources retournées |
 | Bon article | L'article attendu (« Article 2 ») ou, sans numéro d'article, le titre de section attendu figure dans le chemin de section d'une source **citée** |
 | Calibration | Pertinence moyenne des sources pour les réponses justes vs fausses |
+| Étapes de procédure | Questions avec `expected_steps` : part des étapes trouvées dans la réponse (`steps_recall_mean`) et part des procédures complètes (`steps_pass_rate`) ; n'entre pas dans la réussite globale (score sémantique) |
 
 ## Lancer une évaluation
 
@@ -219,3 +238,79 @@ Restent manqués : MAN12 (code d'événement 07, page 27 : aucun passage des pag
 MAN01, le tableau 3.3 des touches (section 3.2.2, page 42) n'entre pas dans le contexte : il est
 dans la section voisine de celle de l'icône. **À refaire sur l'installation du client** avec
 `bge-m3`, PostgreSQL et l'OCR `fra+eng`, puis de bout en bout avec le LLM (`eval.run_eval`).
+
+## Résultats — réponses de procédure, récupération seule (2026-11-22)
+
+Branche `feature/procedure-answers` : consigne de rédaction des procédures (`generate`), voisins
+des sections proches du même chapitre (`RETRIEVAL_NEIGHBOUR_SCOPE=chapter`), reformulation de la
+question dans le vocabulaire des documents (`QUERY_REWRITE`, dans l'appel du planificateur).
+Mêmes conditions que la mesure précédente (VM de développement, `multilingual-e5-small`, plein
+texte en mémoire, OCR anglais, **sans re-classement** : PyTorch et le cross-encoder ne sont pas
+installés dans la VM, **sans LLM**). La portée `section` reproduit exactement la récupération
+d'avant la branche (mêmes chiffres que `a38fdac`).
+
+La consigne de rédaction ne se mesure pas sans LLM. La reformulation est mesurée avec les
+reformulations **simulées** de `eval/datasets/rewrites/` (écrites à la main par le développeur,
+qui avait lu les documents mais n'en a pas recopié les termes propres : elles mesurent le
+mécanisme, pas la qualité des reformulations d'un vrai LLM).
+
+**Manuels** (`golden_manuals.json`, 15 questions répondables) :
+
+| Indicateur | Avant (portée `section`) | `chapter` | `section` + reformulation | `chapter` + reformulation |
+|---|---|---|---|---|
+| Bon document / bonne page | 100 % / 87 % | 100 % / 87 % | 100 % / 87 % | 100 % / 87 % |
+| Pages attendues couvertes (`page_recall`) | 0,87 | 0,87 | 0,87 | 0,87 |
+| Rang réciproque moyen (`mrr`) | 0,53 | 0,53 | **0,57** | **0,57** |
+| Étapes dans le contexte (MAN01, MAN09) | 0,92 | 0,92 | 0,92 | **1,00** |
+| MAN01 : rang du premier passage des pages 42-44 | 6 | 6 | 3 | 3 |
+| MAN01 : étapes dans le contexte | 5/6 (touches page précédente / suivante absentes) | 5/6 (icône Mute absente) | 5/6 (touches absentes) | **6/6** |
+| Taille moyenne du contexte (caractères, budget 12 000) | 10 840 | 10 990 | 10 590 | 10 960 |
+| Pièges refusés à la récupération | 1/5 (MAN16, mention du produit) | 1/5 | 1/5 | 1/5 |
+
+La reformulation remonte le bon passage sur 6 questions (MAN01 6 → 3, MAN09 6 → 3, MAN05 et MAN07
+4 → 2, MAN13 3 → 1) et en descend une (MAN10 1 → 5). MAN12 et MAN14 restent manqués. Les pièges
+(MAN17 à MAN20) passent au LLM avant comme après : avec e5-small, toutes les distances sont sous le
+seuil (voir la mesure précédente) ; aucune reformulation ne s'applique à une question refusée par
+`retrieve` (MAN16 reste refusé sans LLM).
+
+**Ordre de la recette (re-classement), simulé** : en recette, avec `RERANKER=cross_encoder`, la
+page 43 était au rang 1. En plaçant ce passage en tête et les 7 autres passages retenus dans
+l'ordre de la recherche sans re-classement (`expand()` réel sur le corpus réel), la portée
+`section` donne exactement le contexte de la recette (pages 42, 43, 44 de la section 3.2.3) et 5
+étapes sur 6 (tableau 3.3 des touches absent) ; la portée `chapter` y ajoute la fin de la section
+3.2.2 (tableau 3.3 : ACCUEIL, page précédente, page suivante, ENTRÉE ; page 42) et le début de la
+section 3.3 (page 44) : **6 étapes sur 6**, 11 870 caractères.
+
+**Priorité dans le budget** : une première version servait d'abord les voisins de même section de
+**tous** les passages retenus, puis les sections proches. Avec les réglages par défaut (8 passages,
+12 000 caractères), il ne restait jamais de budget pour les sections proches : aucun effet mesuré
+(MAN01 : 5/6 même avec reformulation). D'où l'ordre retenu : pour chaque passage retenu, du mieux
+classé au moins bien classé, ses voisins de même section puis sa section proche. Revers mesuré :
+sans reformulation, MAN01 échange l'icône Mute (voisin du 6ᵉ passage) contre le tableau des touches
+(section proche du 3ᵉ, page 41 → 42) ; le total reste 5/6.
+
+**RH** (`golden_rh.json`, 15 questions répondables, corpus Markdown sans pages) :
+
+| Indicateur | Avant (`section`) | `chapter` | `section` + reformulation | `chapter` + reformulation |
+|---|---|---|---|---|
+| Bon document, rang réciproque | 100 %, 1,00 | 100 %, 1,00 | 100 %, 1,00 | 100 %, 1,00 |
+| Section attendue dans le contexte (`section_hit`) | 93 % (RH10 manquée) | 93 % | **100 %** | **100 %** |
+| Taille moyenne du contexte (caractères) | 7 620 | **11 010** | 7 760 | 10 990 |
+
+Sur les fiches RH, toutes les sections d'une fiche partagent son titre (`#`) : la portée `chapter`
+y joint les sections voisines de la fiche et remplit le budget (+44 % de contexte, soit environ 850
+jetons de plus par question, sans gain mesurable à la récupération). Le budget plafonne ce coût ;
+son effet sur la qualité des réponses RH (bruit, longueur) reste à mesurer avec un LLM
+(`eval.run_eval`). Repli sans redéploiement : `RETRIEVAL_NEIGHBOUR_SCOPE=section`.
+
+**Coût et latence de la reformulation** (estimés, non mesurés faute de LLM) : aucun aller-retour LLM
+de plus quand `AGENTIC_RETRIEVAL=true` (défaut), la reformulation est demandée dans l'appel du
+planificateur (quelques dizaines de jetons de sortie en plus) ; un appel court en plus sinon. Une ou
+deux recherches de plus (plongement de la reformulation, recherche hybride, et re-classement de
+leurs candidats si `RERANKER` est actif), lancées en parallèle des sous-requêtes. Les refus restent
+sans appel au LLM.
+
+**Non mesuré** : la consigne de rédaction et les réponses de bout en bout (LLM réel,
+`eval.run_eval` : `steps_recall_mean`, `steps_pass_rate`), les reformulations d'un vrai LLM, le
+re-classement, `bge-m3`, PostgreSQL, les jeux MiFID (PDF non présents dans la VM) et scans (corpus
+généré non régénéré ; OCR anglais seulement).

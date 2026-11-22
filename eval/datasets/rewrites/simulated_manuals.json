@@ -1,0 +1,65 @@
+{
+  "_note": "Reformulations SIMULÉES, écrites à la main le 2026-11-22 par le développeur (pas par un LLM : aucun LLM réel dans la VM de mesure), dans le registre qu'un planificateur LLM emploierait — termes techniques, formels ou juridiques usuels du domaine. Le rédacteur avait lu les documents : il a évité d'en recopier les termes propres, mais ces reformulations ne sont pas aveugles et mesurent le mécanisme (recherche, fusion, seuil), pas la qualité des reformulations d'un vrai LLM. Usage : python -m eval.tools.measure_retrieval --dataset … --rewrites <ce fichier>.",
+  "MAN01": [
+    "désactiver l'alarme sonore (buzzer) de l'onduleur US30010CNG",
+    "couper le signal sonore d'alarme de l'onduleur US30010CNG avec la touche ou la fonction silence"
+  ],
+  "MAN02": [
+    "signification du signal sonore deux bips courts suivis d'un bip long de l'onduleur US30020CNG"
+  ],
+  "MAN03": [
+    "délai de mise en veille de l'écran LCD de l'onduleur US30015CNG"
+  ],
+  "MAN04": [
+    "fonction du bouton d'arrêt d'urgence EPO de l'onduleur US30040CNG"
+  ],
+  "MAN05": [
+    "plage de température ambiante recommandée pour les batteries de l'onduleur US30010CNG"
+  ],
+  "MAN06": [
+    "procédure de test des batteries de l'onduleur US30030CNG et durée du test"
+  ],
+  "MAN07": [
+    "nombre de batteries internes à installer dans l'onduleur US30020CNG"
+  ],
+  "MAN08": [
+    "délai d'allumage en vert fixe du voyant du redresseur au démarrage de l'onduleur US30010CNG"
+  ],
+  "MAN09": [
+    "désactiver l'alarme sonore de l'onduleur US10002TSARM",
+    "mettre en sourdine le buzzer de l'onduleur US10002TSARM"
+  ],
+  "MAN10": [
+    "durée de charge initiale des batteries de l'onduleur US10001TSARM avant la première utilisation"
+  ],
+  "MAN11": [
+    "procédure de démarrage de l'onduleur US10003TSARM"
+  ],
+  "MAN12": [
+    "signification du code d'événement 07 de l'onduleur US10001.5TSARM"
+  ],
+  "MAN13": [
+    "cause d'une alarme sonore d'un bip par seconde sur l'onduleur US10002TSARM"
+  ],
+  "MAN14": [
+    "poids net de l'onduleur US10003TSARM"
+  ],
+  "MAN15": [
+    "puissance active en watts de l'onduleur US10002TSARM"
+  ],
+  "MAN16": [
+    "désactiver l'alarme sonore de l'onduleur US30050CNG"
+  ],
+  "MAN17": [
+    "signification du signal sonore deux bips courts et un bip long de l'onduleur US10002TSARM"
+  ],
+  "MAN18": [
+    "configuration de la mise en parallèle de plusieurs onduleurs US10001TSARM"
+  ],
+  "MAN19": [
+    "prix de vente public de l'onduleur US10003TSARM"
+  ],
+  "MAN20": [
+    "durée de garantie de l'onduleur US30010CNG"
+  ]
+}

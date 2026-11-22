@@ -125,6 +125,7 @@ def test_unanswerable_question_skips_the_planner(admin, member, member_user, col
 def test_planning_can_be_disabled(admin, member, member_user, collection, llm, monkeypatch):
     _collection_with_two_documents(admin, member_user, collection)
     monkeypatch.setattr(get_settings(), "agentic_retrieval", False)
+    monkeypatch.setattr(get_settings(), "query_rewrite", False)
     llm.responder = _planner
     member.post("/chat/ask", json={"question": QUESTION})
     assert len(llm.calls) == 1 and not is_plan_prompt(llm.calls[0])

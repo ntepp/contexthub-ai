@@ -195,6 +195,11 @@ class Settings(BaseSettings):
     # (0 = none); within a budget for the whole context sent to the LLM, in characters.
     retrieval_neighbours: int = 1
     retrieval_context_chars: int = 12000
+    # "section": neighbours from the passage's own section only. "chapter": then, after each
+    # kept passage's own-section neighbours, up to the first passage of the previous / next
+    # section of the same chapter (keys described in one section, the screen they drive in the
+    # next one), within the same budget.
+    retrieval_neighbour_scope: Literal["section", "chapter"] = "chapter"
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     # Only the N best candidates after fusion are re-ranked, the others keep their order
@@ -225,6 +230,12 @@ class Settings(BaseSettings):
     # so that no proxy (Cloudflare closes a silent response after ~100 s, nginx after
     # proxy_read_timeout) cuts the stream while the answer is being prepared.
     sse_heartbeat_seconds: float = Field(default=10.0, gt=0)
+    # Query rewording: the same planner call also rewords the question in the vocabulary the
+    # documents are likely to use (up to N rewordings), searched on top of it and fused with
+    # its ranking (RRF). No extra LLM call when AGENTIC_RETRIEVAL is on (one otherwise); only
+    # after the question itself found passages, so refusals stay LLM-free.
+    query_rewrite: bool = True
+    query_rewrite_max: int = 2
     no_answer_text: str = DEFAULT_NO_ANSWER
     product_mismatch_text: str = DEFAULT_PRODUCT_MISMATCH
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH

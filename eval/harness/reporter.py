@@ -22,6 +22,8 @@ CSV_COLUMNS = [
     "confidence_metric",
     "latency_seconds",
     "error",
+    "steps_recall",
+    "steps_pass",
     "sources_json",
 ]
 
@@ -59,6 +61,12 @@ def format_console(summary: dict) -> str:
         f"Score sémantique moyen : {g.get('semantic_mean')}  |  taux > seuil : {pct(g.get('semantic_pass_rate'))}",
         f"Bonne source récupérée : {pct(g.get('retrieval_hit_rate'))}  |  bon article cité : {pct(g.get('article_hit_rate'))}",
         f"Latence moyenne : {g.get('latency_mean_seconds')} s",
+        *(
+            [f"Étapes de procédure retrouvées : {pct(g['steps_recall_mean'])}  |  procédures complètes : "
+             f"{pct(g.get('steps_pass_rate'))}"]
+            if g.get("steps_recall_mean") is not None
+            else []
+        ),
         "",
         "Par catégorie :",
     ]

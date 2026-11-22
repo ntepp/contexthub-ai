@@ -16,6 +16,9 @@ class GoldenQuestion:
     source_document: str | None
     reference_article: str | None
     answerable: bool
+    # Procedure questions: [{"label": "...", "terms": ["...", ...]}] — each step is found in an
+    # answer when one of its terms appears in it (case, accents and apostrophes ignored).
+    expected_steps: list[dict] | None = None
 
     @property
     def expected_documents(self) -> list[str]:
@@ -46,6 +49,7 @@ def load_golden_dataset(path: str | Path) -> GoldenDataset:
                 source_document=item.get("source_document"),
                 reference_article=item.get("reference_article"),
                 answerable=bool(item["answerable"]),
+                expected_steps=item.get("expected_steps"),
             )
         )
     return GoldenDataset(metadata=raw.get("metadata", {}), questions=questions)
@@ -60,6 +64,13 @@ def validate_dataset(ds: GoldenDataset, no_answer: str) -> list[str]:
         seen.add(q.id)
         if q.answerable and not q.source_document:
             errors.append(f"{q.id} : question répondable sans source_document")
+        if q.expected_steps is not None:
+            if not q.answerable:
+                errors.append(f"{q.id} : étapes attendues sur un piège")
+            for step in q.expected_steps if isinstance(q.expected_steps, list) else [None]:
+                terms = step.get("terms") if isinstance(step, dict) else None
+                if not isinstance(terms, list) or not terms or not all(isinstance(t, str) and t.strip() for t in terms):
+                    errors.append(f"{q.id} : étape attendue sans termes ({step!r})")
         if not q.answerable:
             if q.source_document:
                 errors.append(f"{q.id} : piège avec un source_document")

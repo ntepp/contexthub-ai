@@ -31,6 +31,19 @@ def test_the_manuals_set_is_valid_and_names_pages_and_products():
             assert q["expected_pages"] and q["source_document"] in files
     assert questions[0]["question"].startswith("j'ai une alarme sur mon onduleur Nitram US30010CNG")
     assert questions[0]["expected_pages"] == [42, 43, 44]
+    # The procedure question names the steps a complete answer gives (keys, icon, limits).
+    labels = " | ".join(step["label"] for step in questions[0]["expected_steps"])
+    for expected in ("ACCUEIL", "page suivante", "Mute", "ENTRÉE", "alarmes générales", "alarme continue"):
+        assert expected in labels
+
+
+def test_the_simulated_rewordings_say_who_wrote_them_and_cover_their_set():
+    for name, dataset in (("simulated_manuals.json", DATASET), ("simulated_rh.json", Path("eval/datasets/golden_rh.json"))):
+        rewrites = json.loads((Path("eval/datasets/rewrites") / name).read_text(encoding="utf-8"))
+        assert "SIMULÉES" in rewrites["_note"] and "pas par un LLM" in rewrites["_note"]
+        ids = {q["id"] for q in json.loads(dataset.read_text(encoding="utf-8"))["questions"]}
+        assert set(rewrites) - {"_note"} == ids
+        assert all(isinstance(v, list) and 1 <= len(v) <= 2 for k, v in rewrites.items() if k != "_note")
 
 
 def _chunk(filename: str, page: int, page_end: int | None = None, neighbour: bool = False) -> RetrievedChunk:
@@ -59,6 +72,23 @@ def test_scoring_of_one_question():
     assert tool.score(trap, {"context": [], "answer": no_answer}, no_answer)["outcome"] == "refused"
     summary = tool.aggregate([row, notice])
     assert summary["page_hit"] == 1.0 and summary["notices_expected_ok"] == 1.0
+
+
+def test_page_recall_section_hit_and_steps_in_context():
+    no_answer = get_settings().no_answer_text
+    question = {"id": "P", "category": "procedure", "answerable": True, "source_document": "a.pdf",
+                "expected_pages": [42, 43, 44], "reference_article": "Ecran LCD",
+                "expected_steps": [{"label": "accueil", "terms": ["ACCUEIL", "HOME"]},
+                                   {"label": "silence", "terms": ["Mute", "Silence"]},
+                                   {"label": "valider", "terms": ["touche ENTRÉE"]}]}
+    first, second = _chunk("a.pdf", 42, 43), _chunk("a.pdf", 50)
+    first.content = "Retour à la page d'accueil : touche Accueil. Icône Mute."
+    first.metadata["section_path"] = ["3 Ecran", "3.2.3 Écran LCD"]
+    row = tool.score(question, {"anchors": [first], "context": [first, second], "answer": None}, no_answer)
+    assert row["page_recall"] == round(2 / 3, 4) and row["section_hit"] is True
+    assert row["steps_in_context"] == round(2 / 3, 4) and row["steps_missing"] == ["valider"]
+    summary = tool.aggregate([row])
+    assert summary["steps_in_context"] == round(2 / 3, 4) and summary["section_hit"] == 1.0
 
 
 def test_corpus_files_are_checked_by_name_and_fingerprint(tmp_path):
@@ -104,3 +134,17 @@ def test_measure_on_an_in_memory_corpus(tmp_path, capsys):
     rows = {r["id"]: r for r in report["rows"]}
     assert rows["A1"]["doc_hit"] and rows["A1"]["other_product_share"] == 0.0
     assert rows["T1"]["outcome"] == "notice" and rows["T1"]["notice_ok"]
+    assert report["settings"]["retrieval_neighbour_scope"] == get_settings().retrieval_neighbour_scope
+
+    # Given rewordings are replayed by the plan node (scripted planner); a refusal stays one.
+    rewrites = tmp_path / "rewrites.json"
+    rewrites.write_text(json.dumps({"_note": "test", "A1": ["silence du buzzer du ZX2010KT"],
+                                    "T1": ["silence du buzzer du AB9990XY"]}), encoding="utf-8")
+    agentic = get_settings().agentic_retrieval
+    assert tool.main(["--dataset", str(path), "--corpus", str(corpus), "--output", str(tmp_path / "rw"),
+                      "--rewrites", str(rewrites)]) == 0
+    assert get_settings().agentic_retrieval == agentic  # restored
+    report = json.loads(next((tmp_path / "rw").glob("retrieval-*.json")).read_text(encoding="utf-8"))
+    rows = {r["id"]: r for r in report["rows"]}
+    assert rows["A1"]["rewrites"] == ["silence du buzzer du ZX2010KT"] and rows["A1"]["doc_hit"]
+    assert rows["T1"]["outcome"] == "notice" and rows["T1"]["rewrites"] == []

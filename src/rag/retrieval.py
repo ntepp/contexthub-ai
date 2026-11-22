@@ -24,7 +24,9 @@ planner's sub-queries, so that one answer never scores more pairs than that.
 Neighbours: a procedure often runs over several passages and pages. Around each kept
 passage, the adjacent passages of the same document and section (``RETRIEVAL_NEIGHBOURS``
 on each side, pages next to each other) join the context, best-ranked passages first, within
-``RETRIEVAL_CONTEXT_CHARS``. They only ever come with a kept passage: the grounding
+``RETRIEVAL_CONTEXT_CHARS``. With ``RETRIEVAL_NEIGHBOUR_SCOPE=chapter``, each run is then
+carried on to the first passage of the previous / next section of the same chapter
+(:mod:`src.rag.neighbours`), after the passage's own-section neighbours. They only ever come with a kept passage: the grounding
 threshold still decides alone whether the question is answered.
 """
 
@@ -39,6 +41,7 @@ from sqlalchemy import select
 
 from src.config import DEFAULT_PRODUCT_MISMATCH, get_settings
 from src.ingestion.references import matching, question_references
+from src.rag import neighbours as nearby
 from src.retrieval import rerank as reranker
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import RetrievedChunk, get_store
@@ -281,16 +284,19 @@ async def expand(
     """``anchors`` with their adjacent passages: the passages right before and after each one
     in its document and section (each on the page of the passage next to it or the page
     after / before), best-ranked anchors served first, nearest
-    neighbours first, within ``RETRIEVAL_CONTEXT_CHARS``; each anchor followed by its
-    neighbours in document order. Anchors are never dropped."""
+    neighbours first, within ``RETRIEVAL_CONTEXT_CHARS``; with the ``chapter`` scope, each
+    anchor's run then carries on to the nearby sections, after that anchor's own-section
+    neighbours and before the next anchor's; each anchor followed by its neighbours in
+    document order. Anchors are never dropped."""
     settings = get_settings()
     depth = settings.retrieval_neighbours
+    scope = settings.retrieval_neighbour_scope
     anchors = list(anchors)
     present = {(a.document_id, a.chunk_index) for a in anchors if a.chunk_index is not None}
     wanted = {
         (doc_id, index + step * side)
         for doc_id, index in present
-        for step in range(1, depth + 1)
+        for step in range(1, nearby.reach(depth, scope) + 1)
         for side in (-1, 1)
         if index + step * side >= 0
     } - present
@@ -300,28 +306,41 @@ async def expand(
     at = {(c.document_id, c.chunk_index): c for c in found}
     budget = settings.retrieval_context_chars - sum(len(a.content) for a in anchors)
     chosen: dict[tuple[uuid.UUID, int], RetrievedChunk] = {}
-    for step in range(1, depth + 1):
-        for anchor in anchors:
-            if anchor.chunk_index is None:
+
+    def join(anchor: RetrievedChunk, step: int) -> None:
+        nonlocal budget
+        for side in (-1, 1):
+            position = (anchor.document_id, anchor.chunk_index + step * side)
+            between = (anchor.document_id, anchor.chunk_index + (step - 1) * side)
+            chunk = at.get(position)
+            if chunk is None or position in chosen or position in present:
                 continue
-            for side in (-1, 1):
-                position = (anchor.document_id, anchor.chunk_index + step * side)
-                between = (anchor.document_id, anchor.chunk_index + (step - 1) * side)
-                chunk = at.get(position)
-                if chunk is None or position in chosen or position in present:
-                    continue
-                if step > 1 and between not in chosen and between not in present:
-                    continue  # only contiguous runs: never skip a passage
-                # Pages next to each other along the run (a long section stays on one page).
-                if (
-                    not _same_section(anchor, chunk)
-                    or not _next_pages(at.get(between) or anchor, chunk)
-                    or len(chunk.content) > budget
-                ):
-                    continue
-                budget -= len(chunk.content)
-                chunk.neighbour_of = anchor.id
-                chosen[position] = chunk
+            if step > 1 and between not in chosen and between not in present:
+                continue  # only contiguous runs: never skip a passage
+            # Pages next to each other along the run (a long section stays on one page).
+            if (
+                not _same_section(anchor, chunk)
+                or not _next_pages(at.get(between) or anchor, chunk)
+                or len(chunk.content) > budget
+            ):
+                continue
+            budget -= len(chunk.content)
+            chunk.neighbour_of, chunk.neighbour_scope = anchor.id, nearby.SECTION
+            chosen[position] = chunk
+
+    ranked = [a for a in anchors if a.chunk_index is not None]
+    if scope == nearby.CHAPTER:
+        # Best-ranked anchor first: its own section's neighbours, then its walk to the nearby
+        # sections, before the next anchor's neighbours (see src.rag.neighbours).
+        positions = {**at, **{(a.document_id, a.chunk_index): a for a in ranked}}
+        for anchor in ranked:
+            for step in range(1, depth + 1):
+                join(anchor, step)
+            budget = nearby.walk_to_next_sections(anchor, positions, chosen, present, budget, depth, _next_pages)
+    else:
+        for step in range(1, depth + 1):
+            for anchor in ranked:
+                join(anchor, step)
     context: list[RetrievedChunk] = []
     seen: set[uuid.UUID] = set()
     for anchor in anchors:
@@ -364,7 +383,11 @@ def describe(found: Retrieval, excerpt: int = 0) -> list[dict]:
         Candidate(
             chunk,
             status=NEIGHBOUR,
-            reason=f"voisin du passage retenu n° {rank.get(chunk.neighbour_of, '?')}",
+            reason=f"voisin du passage retenu n° {rank.get(chunk.neighbour_of, '?')}" + (
+                f", section voisine « {(chunk.metadata or {}).get('section')} »"
+                if chunk.neighbour_scope == nearby.CHAPTER
+                else ""
+            ),
             **_product_of(found, chunk),
         )
         for chunk in found.context
@@ -395,6 +418,7 @@ def describe(found: Retrieval, excerpt: int = 0) -> list[dict]:
             "product": candidate.product,
             "matched_refs": candidate.matched_refs,
             "via_reference": candidate.via_reference,
+            "neighbour_scope": chunk.neighbour_scope if candidate.status == NEIGHBOUR else None,
             "reason": candidate.reason,
         }
         if excerpt:

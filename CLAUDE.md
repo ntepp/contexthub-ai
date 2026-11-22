@@ -52,13 +52,14 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional cross-encoder: first `limit` candidates only, pair cache, batches, `RERANKER_DEVICE` auto = CUDA if present, one scoring call at a time) |
 | `src/rag/retrieval.py` | One retrieval code path for the `retrieve` node and `cli explain-retrieval`: `search()` (hybrid search, product references: search restricted to the documents carrying the question's reference + `RETRIEVAL_REFERENCE_BOOST`, threshold, rerank within `rerank_limit`, other-product filter and notice, top-k, every candidate with its reason), `question_rerank_limit()` / `sub_query_rerank_limit()` (`RERANK_MAX_PAIRS` per answer), `expand()` (neighbours), `retrieve_context()`, `describe()` |
-| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()` (`status` + `token` events), `create_and_run_graph()` (by collection name); per-step `timings` in the state, one `[timing]` log line per answer |
+| `src/rag/neighbours.py` | `RETRIEVAL_NEIGHBOUR_SCOPE=chapter`: `near_sections()` (previous / next section with the same parent), `walk_to_next_sections()` (each kept passage's run carried on to the nearby section, contiguous, ≤ `RETRIEVAL_NEIGHBOURS + 1` passages per side, whole or nothing) |
+| `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition and, in the same LLM call, rewording in the documents' vocabulary: `plan_prompt()`, `parse_rewrites()`, `fuse()`; `generate` rule 7 = procedure answers); `answer_question()`, `stream_answer()` (`status` + `token` events), `create_and_run_graph()` (by collection name); per-step `timings` in the state, one `[timing]` log line per answer |
 | `src/llm/factory.py` | `provider:model` ids; offered models = `hub_settings` key `models` if set (`model_offer()`, checked against `available_catalogue()`), else `LLM_MODELS` / gateway catalogue; Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/instance_settings.py` | `get` / `put` / `delete` of `hub_settings` (JSON per key), 5 s in-process cache (expires by itself: several workers), read errors fall back on the environment |
 | `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
 | `src/ocr/` | ADR-003. `base` (`OcrEngine` protocol, `OcrError`), `tesseract` (default local adapter, every failure mapped to `OcrError`), `registry` (`get_ocr_engine()`, test override, `engine_check()` for `/admin/system`), `preprocess` (grayscale, upscale, deskew, blank page; Pillow only), `reader` (`read_page`: orientation, confidence) |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (default queue, backoff on transient errors only; hands documents with pages to OCR to `ocr_document`, routed to queue `ocr`) + `ocr_worker` launcher + nightly `purge_expired` |
-| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`, `golden_rh_scans.json` on a generated, unversioned `eval/corpora/rh_scans`, `golden_manuals.json` on proprietary manuals the user copies to the unversioned `eval/corpora/manuals` — never commit them nor their text), metrics, reporter, runner, `tools/fetch_service_public.py`, `tools/make_scanned_corpus.py`, `tools/measure_ocr.py`, `tools/measure_retrieval.py` (retrieve node only, expected pages) |
+| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`, `golden_rh_scans.json` on a generated, unversioned `eval/corpora/rh_scans`, `golden_manuals.json` on proprietary manuals the user copies to the unversioned `eval/corpora/manuals` — never commit them nor their text), metrics, reporter, runner, `tools/fetch_service_public.py`, `tools/make_scanned_corpus.py`, `tools/measure_ocr.py`, `tools/measure_retrieval.py` (retrieve node only, expected pages, `expected_steps` in the context; `--rewrites` replays given rewordings through the `plan` node — `eval/datasets/rewrites/` are hand-written, not LLM output) |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
 
 ## Invariants — do not break
@@ -76,7 +77,9 @@ docker compose up -d --build               # production stack (docker-compose.ya
   that leaves nothing, `retrieve` answers `NO_ANSWER_TEXT + " " + PRODUCT_MISMATCH_TEXT`, refused,
   without sources and without calling the LLM. Planner sub-queries keep the question's references.
 - Neighbours (`retrieval.expand`) are only added around kept passages (same document and section,
-  next pages, `RETRIEVAL_CONTEXT_CHARS`): they never decide grounding and never count in the
+  next pages, `RETRIEVAL_CONTEXT_CHARS`; with `RETRIEVAL_NEIGHBOUR_SCOPE=chapter`, then up to the
+  previous / next section of the same chapter, after that passage's own-section neighbours and
+  before the next kept passage's): they never decide grounding and never count in the
   confidence. State `anchors` = kept passages (what `plan` merges), `context` = what the LLM reads.
 - `cli explain-retrieval` and the `retrieve` node call the same `retrieval.retrieve_context()`: never
   fork the retrieval logic for the diagnostic.
@@ -97,7 +100,13 @@ docker compose up -d --build               # production stack (docker-compose.ya
   question takes `min(RERANK_CANDIDATES, RERANK_MAX_PAIRS)`, the planner's sub-queries share what is
   left. `rerank_score` is the cross-encoder's, `score` stays the fused one.
 - `plan` runs only after `retrieve` kept something for the question itself (refusals stay LLM-free); the
-  question's own ranking always comes first in the merge and a bad planner reply falls back to it.
+  question's own ranking (fused by RRF with its rewordings) always comes first in the merge and a bad
+  planner reply falls back to it.
+- Rewordings (`QUERY_REWRITE`) are only written in `plan`'s single LLM call and only searched: the
+  answering LLM reads the question as asked, a rewording never turns a refusal into an answer (it is
+  never written for a refused question; each search applies the distance threshold), duplicates of
+  the question or a sub-query are dropped, and the confidence ignores passages found by a rewording
+  alone. With `QUERY_REWRITE=false` the planner prompt is exactly the sub-query one.
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
 - OCR runs only on the `ocr` queue (`ocr_document`); the default worker never consumes it, so a
   text document never waits behind a scan. OCR engine failures are `OcrError`, never `OSError`

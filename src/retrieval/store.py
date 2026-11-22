@@ -58,11 +58,13 @@ class RetrievedChunk:
     lexical_rank: int | None = None
     lexical_score: float | None = None
     chunk_index: int | None = None
-    # Set on a passage joined to the context for being next to a kept one (that one's id).
+    # Set on a passage joined to the context for being next to a kept one (that one's id), and
+    # how: "section" (same section) or "chapter" (nearby section, RETRIEVAL_NEIGHBOUR_SCOPE).
     neighbour_of: uuid.UUID | None = None
     # Cross-encoder score (RERANKER=cross_encoder; higher = more relevant), None when the
     # passage was not re-ranked. ``score`` keeps the fused score.
     rerank_score: float | None = None
+    neighbour_scope: str | None = None
 
 
 class ChunkStore(Protocol):
