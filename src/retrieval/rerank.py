@@ -97,6 +97,11 @@ def _cross_encoder():
         settings.reranker_max_length,
         " (hors ligne)" if settings.hf_hub_offline else "",
     )
+    if device.startswith("cpu"):
+        log.warning(
+            "[rerank] re-classement sur CPU : jusqu'à plusieurs secondes par paire ; GPU recommandé, "
+            "sinon réduisez RERANK_CANDIDATES et RERANK_MAX_PAIRS (docs/deployment.md)"
+        )
     try:
         encoder = CrossEncoder(
             model,
