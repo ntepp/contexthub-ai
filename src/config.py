@@ -195,6 +195,11 @@ class Settings(BaseSettings):
     # (0 = none); within a budget for the whole context sent to the LLM, in characters.
     retrieval_neighbours: int = 1
     retrieval_context_chars: int = 12000
+    # "section": neighbours from the passage's own section only. "chapter": then, after each
+    # kept passage's own-section neighbours, up to the first passage of the previous / next
+    # section of the same chapter (keys described in one section, the screen they drive in the
+    # next one), within the same budget.
+    retrieval_neighbour_scope: Literal["section", "chapter"] = "chapter"
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     # Only the N best candidates after fusion are re-ranked, the others keep their order

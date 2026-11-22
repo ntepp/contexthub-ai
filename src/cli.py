@@ -90,6 +90,7 @@ def _reindex(args) -> int:
 
 
 _STATUS_LABELS = {"kept": "retenu", "excluded": "exclu", "neighbour": "voisin"}
+_SCOPE_LABELS = {"section": "même section", "chapter": "même section puis sections voisines du chapitre"}
 
 
 def _product_cell(row: dict) -> str:
@@ -150,6 +151,7 @@ def _explain_retrieval(args) -> int:
             "rerank_max_pairs": settings.rerank_max_pairs,
             "retrieval_reference_boost": settings.retrieval_reference_boost,
             "retrieval_neighbours": settings.retrieval_neighbours,
+            "retrieval_neighbour_scope": settings.retrieval_neighbour_scope,
             "retrieval_context_chars": settings.retrieval_context_chars,
         }, "asked_refs": result.asked_refs, "notice": result.notice, "rerank": {
             "limit": result.rerank_limit,
@@ -166,7 +168,8 @@ def _explain_retrieval(args) -> int:
     print(
         f"Réglages : seuil de distance {settings.retrieval_max_distance:.2f}, top_k {settings.retrieval_top_k}, "
         f"{settings.retrieval_candidates} candidats par liste, hybride {'oui' if settings.retrieval_hybrid else 'non'}, "
-        f"re-classement {settings.reranker}"
+        f"re-classement {settings.reranker}, voisins {settings.retrieval_neighbours} de chaque côté "
+        f"(portée {_SCOPE_LABELS.get(settings.retrieval_neighbour_scope, settings.retrieval_neighbour_scope)})"
     )
     if settings.reranker != "none":
         print(

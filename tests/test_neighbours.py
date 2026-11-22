@@ -6,13 +6,13 @@ import asyncio
 import uuid
 
 from src.config import get_settings
-from src.rag import retrieval
+from src.rag import neighbours, retrieval
 from src.retrieval.store import ChunkRecord, RetrievedChunk
 from tests.conftest import grant, upload
 from tests.fakes import HashEmbeddings, make_pdf
 
 COLLECTION = uuid.uuid4()
-WORDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+WORDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
 DOC = uuid.uuid4()
 
 
@@ -130,3 +130,107 @@ def test_the_chat_cites_neighbours_and_keeps_its_confidence_on_the_kept_passages
         "/chat/ask", json={"question": "Quel est le menu de la cantine ?", "collection_ids": [collection["id"]]}
     ).json()
     assert off_topic["refused"] is True and off_topic["sources"] == []
+
+
+# --------------------------------------------------------------------------- nearby sections
+# Chapter 1: sections 1.1 (passages 0-1) and 1.2 (passages 2-4); chapter 2: 2.1 (5-6), 2.2 (7).
+PATHS = [
+    ["1 Panneau", "1.1 Touches"],
+    ["1 Panneau", "1.1 Touches"],
+    ["1 Panneau", "1.2 Ecran"],
+    ["1 Panneau", "1.2 Ecran"],
+    ["1 Panneau", "1.2 Ecran"],
+    ["2 Maintenance", "2.1 Batteries"],
+    ["2 Maintenance", "2.1 Batteries"],
+    ["2 Maintenance", "2.2 Ventilateurs"],
+]
+
+
+def _fill_sections(store, pages=(1, 1, 2, 2, 3, 3, 3, 4), size=100) -> list[ChunkRecord]:
+    records = _fill(store, pages=pages, size=size)
+    for record, path in zip(records, PATHS, strict=True):
+        record.metadata.update({"section_path": path, "section": path[-1]})
+    return records
+
+
+def test_near_sections_are_the_sections_around_in_the_same_chapter():
+    near = neighbours.near_sections
+    assert near(["3", "3.2", "3.2.3"], ["3", "3.2", "3.2.2"])  # siblings
+    assert near(["3", "3.2", "3.2.1"], ["3", "3.2"])  # the parent's introduction
+    assert near(["3", "3.2", "3.2.3"], ["3", "3.3"])  # next section one level up, same chapter
+    assert near(["Titre I", "Chapitre II", "Article 5"], ["Titre I", "Chapitre II", "Article 6"])
+    assert not near(["3", "3.4"], ["4", "4.1"])  # another chapter
+    assert not near(["3", "3.2", "3.2.3"], ["3", "3.2", "3.2.3"])  # same section
+    assert not near([], ["3"]) and not near(["3"], []) and not near([], [])
+    assert not near(["3", "3.2", "3.2.3", "a"], ["3", "3.4", "3.4.1"])  # two levels apart
+
+
+def test_section_scope_keeps_the_neighbours_in_the_section(store, monkeypatch):
+    records = _fill_sections(store)
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "section")
+    assert _indexes(_expand([_anchor(records[2])])) == [2, 3]
+
+
+def test_chapter_scope_reaches_the_previous_section_of_the_chapter_not_the_next_chapter(store, monkeypatch):
+    records = _fill_sections(store)
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "chapter")
+    context = _expand([_anchor(records[3])])
+    assert _indexes(context) == [1, 2, 3, 4]  # 1.1 joins; 2.1 (chapter 2) does not
+    scopes = {c.chunk_index: c.neighbour_scope for c in context}
+    assert scopes == {1: "chapter", 2: "section", 3: None, 4: "section"}
+    # From the end of a section, the walk crosses the passages of the own section that separate
+    # it from the nearby one (contiguous, never skipping a passage): 3 then 2, then 1 (1.1).
+    context = _expand([_anchor(records[4])])
+    assert _indexes(context) == [1, 2, 3, 4]
+    assert {c.chunk_index: c.neighbour_scope for c in context} == {1: "chapter", 2: "section", 3: "section", 4: None}
+
+
+def test_nearby_sections_come_after_the_passage_own_neighbours_and_before_the_next_passage(store, monkeypatch):
+    records = _fill_sections(store)
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "chapter")
+    # Anchors 3 then 6 (200): 3's own-section neighbours 2 and 4, then its walk to 1.1 (300), which
+    # comes before 6's own-section neighbour 5 — nothing left for it.
+    monkeypatch.setattr(get_settings(), "retrieval_context_chars", 500)
+    assert _indexes(_expand([_anchor(records[3]), _anchor(records[6])])) == [1, 2, 3, 4, 6]
+    monkeypatch.setattr(get_settings(), "retrieval_context_chars", 700)
+    assert _indexes(_expand([_anchor(records[3]), _anchor(records[6])])) == [1, 2, 3, 4, 5, 6, 7]
+    # The section scope keeps the previous order: own-section neighbours of every kept passage.
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "section")
+    monkeypatch.setattr(get_settings(), "retrieval_context_chars", 500)
+    assert _indexes(_expand([_anchor(records[3]), _anchor(records[6])])) == [2, 3, 4, 5, 6]
+
+
+def test_a_walk_to_a_nearby_section_is_taken_whole_or_not_at_all(store, monkeypatch):
+    records = _fill_sections(store)
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "chapter")
+    # From anchor 4: own-section neighbour 3, then the walk 2 (own section) + 1 (1.1) = 200.
+    monkeypatch.setattr(get_settings(), "retrieval_context_chars", 300)
+    assert _indexes(_expand([_anchor(records[4])])) == [3, 4]
+    monkeypatch.setattr(get_settings(), "retrieval_context_chars", 400)
+    assert _indexes(_expand([_anchor(records[4])])) == [1, 2, 3, 4]
+    monkeypatch.setattr(get_settings(), "retrieval_neighbours", 0)
+    assert _indexes(_expand([_anchor(records[4])])) == [4]
+
+
+def test_nearby_sections_stay_on_next_pages(store, monkeypatch):
+    records = _fill_sections(store, pages=(1, 1, 5, 5, 6, 6, 6, 7))
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "chapter")
+    assert _indexes(_expand([_anchor(records[3])])) == [2, 3, 4]  # 1.1 is on page 1, 1.2 starts on page 5
+
+
+def test_a_nearby_section_never_decides_grounding_and_is_explained(store, monkeypatch):
+    records = _fill_sections(store)
+    monkeypatch.setattr(get_settings(), "retrieval_neighbour_scope", "chapter")
+    monkeypatch.setattr(get_settings(), "retrieval_top_k", 1)
+    found = asyncio.run(retrieval.retrieve_context("passage delta", [COLLECTION]))
+    assert _indexes(found.kept) == [3] and _indexes(found.context) == [1, 2, 3, 4]
+    rows = retrieval.describe(found)
+    chapter = next(r for r in rows if r["chunk_index"] == 1)
+    assert chapter["status"] == "neighbour" and chapter["neighbour_scope"] == "chapter"
+    assert chapter["reason"] == "voisin du passage retenu n° 1, section voisine « 1.1 Touches »"
+    same = next(r for r in rows if r["chunk_index"] == 2)
+    assert same["reason"] == "voisin du passage retenu n° 1" and same["neighbour_scope"] == "section"
+    # Nothing under the threshold: no neighbour of any scope, the question is refused.
+    nothing = asyncio.run(retrieval.retrieve_context("recette du gateau au chocolat", [COLLECTION]))
+    assert nothing.kept == [] and nothing.context == []
+    assert records
