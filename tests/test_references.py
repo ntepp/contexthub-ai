@@ -151,13 +151,15 @@ def test_reference_search_reaches_documents_outside_the_candidate_pool(admin, tw
         reset_settings_cache()
 
 
-def test_an_unknown_reference_changes_nothing_but_the_classification(two_manuals):
+def test_a_question_without_reference_is_searched_as_before(two_manuals, monkeypatch):
     collection, _, _ = two_manuals
-    plain = _search(collection["id"], "Mon onduleur bipe, comment eteindre l alarme ?")
-    other = _search(collection["id"], "Mon onduleur AB9999 bipe, comment eteindre l alarme ?")
-    assert other.asked_refs == ["AB9999"]
-    assert [c.document_id for c in other.kept] == [c.document_id for c in plain.kept]
-    assert all(c.product == "other" for c in other.candidates)
+    question = "Mon onduleur bipe, comment eteindre l alarme ?"
+    plain = _search(collection["id"], question)
+    calls = []
+    monkeypatch.setattr(retrieval, "document_references", lambda ids: calls.append(ids) or {})
+    again = _search(collection["id"], question)
+    assert calls == []  # no lookup of the documents' references
+    assert [(c.chunk.id, c.chunk.score) for c in again.candidates] == [(c.chunk.id, c.chunk.score) for c in plain.candidates]
 
 
 def test_migration_adds_and_removes_the_product_references_column():

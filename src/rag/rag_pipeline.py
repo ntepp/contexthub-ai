@@ -31,6 +31,7 @@ from langgraph.graph import START, StateGraph
 from typing_extensions import TypedDict
 
 from src.config import get_settings
+from src.ingestion.references import question_references
 from src.llm.factory import ModelSpec, parse_model_id, resolve_model
 from src.llm.llm_chain import initialize_model_llm
 from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
@@ -52,7 +53,10 @@ Rules, in order of precedence:
 2. Use only the sources, never prior knowledge. Do not speculate or extrapolate.
 3. After each statement, cite the supporting source numbers in square brackets, e.g. [1] or [2][3].
 4. Always answer in the same language as the question.
-5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them."""
+5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them.
+6. A source may start with the document it comes from and the product references it is about, in
+   square brackets. When the question names a product, never apply to it a source about another
+   product; if no source is about the product named, say so."""
 
 
 def system_prompt() -> str:
@@ -268,10 +272,22 @@ def _spec(state: State) -> ModelSpec:
     return parse_model_id(state["model_id"])
 
 
-async def _search(query: str, collection_ids: list[uuid.UUID]) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
+async def _search(
+    query: str, collection_ids: list[uuid.UUID], references: list[str] | None = None
+) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
     """(all candidates, grounded top-k) for one query."""
-    found = await retrieval.search(query, collection_ids)
+    found = await retrieval.search(query, collection_ids, references)
     return [c.chunk for c in found.candidates], found.kept
+
+
+def _references(state: State) -> list[str]:
+    """Product references cited by the question, as asked and as reformulated."""
+    found: list[str] = []
+    for text in (state.get("standalone_question") or "", state["question"]):
+        for ref in question_references(text):
+            if ref not in found:
+                found.append(ref)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +317,7 @@ async def retrieve(state: State) -> dict:
     query = state.get("standalone_question") or state["question"]
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
 
-    found = await retrieval.retrieve_context(query, collection_ids)
+    found = await retrieval.retrieve_context(query, collection_ids, _references(state))
     results, kept = [c.chunk for c in found.candidates], found.kept
 
     log.info(
@@ -316,12 +332,15 @@ async def retrieve(state: State) -> dict:
 
     if not kept:
         RAG_RETAINED_CHUNKS.observe(0)
-        log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
+        if found.notice:
+            log.warning("[retrieve] sources sur d'autres produits que %s — court-circuit", ", ".join(found.asked_refs))
+        else:
+            log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
             "search_queries": [query],
             "anchors": [],
             "context": [],
-            "answer": no_answer_text(),
+            "answer": found.notice or no_answer_text(),
             "sources": [],
             "confidence_metric": 0.0,
             "refused": True,
@@ -358,7 +377,9 @@ async def plan(state: State) -> dict:
         return {}
 
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
-    extra = await asyncio.gather(*(_search(q, collection_ids) for q in queries[1:]))
+    # Sub-queries keep the question's product references, even when the planner drops them.
+    references = _references(state)
+    extra = await asyncio.gather(*(_search(q, collection_ids, references) for q in queries[1:]))
     rankings = [state.get("anchors") or state["context"]] + [kept for _, kept in extra]
     merged = interleave(rankings, settings.retrieval_top_k)
     vector = await asyncio.to_thread(get_embeddings().embed_query, question)

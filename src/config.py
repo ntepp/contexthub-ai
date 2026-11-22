@@ -24,6 +24,9 @@ _INSECURE_SECRET = "dev-insecure-secret-change-me"
 SUPPORTED_GATEWAY_KINDS = ("litellm",)
 
 DEFAULT_NO_ANSWER = "L'information n'est pas disponible dans la base de connaissances actuelle."
+# Follows NO_ANSWER_TEXT when the question cites a product reference and every source found
+# is about other products: {found} = their references, {asked} = the question's.
+DEFAULT_PRODUCT_MISMATCH = "Les sources trouvées concernent {found}, pas {asked}."
 
 
 class Settings(BaseSettings):
@@ -201,6 +204,7 @@ class Settings(BaseSettings):
     agentic_retrieval: bool = True
     agentic_max_queries: int = 3
     no_answer_text: str = DEFAULT_NO_ANSWER
+    product_mismatch_text: str = DEFAULT_PRODUCT_MISMATCH
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH
     # d'ACME ; les documents sont la convention collective et les accords d'entreprise."
     assistant_context: str = ""

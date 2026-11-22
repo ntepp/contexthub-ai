@@ -149,7 +149,7 @@ def _explain_retrieval(args) -> int:
             "retrieval_reference_boost": settings.retrieval_reference_boost,
             "retrieval_neighbours": settings.retrieval_neighbours,
             "retrieval_context_chars": settings.retrieval_context_chars,
-        }, "asked_refs": result.asked_refs, "candidates": rows}, indent=2, ensure_ascii=False))
+        }, "asked_refs": result.asked_refs, "notice": result.notice, "candidates": rows}, indent=2, ensure_ascii=False))
         return 0
 
     kept = sum(1 for row in rows if row["status"] == "kept")
@@ -170,6 +170,8 @@ def _explain_retrieval(args) -> int:
             "dans les collections ; « = » : le document porte la référence, « autre » : il en porte d'autres, "
             "« (réf.) » : trouvé par la recherche limitée aux documents qui la portent."
         )
+    if result.notice:
+        print(f"Garde-fou produit (réponse sans appel au LLM) : {result.notice}")
     print(
         f"{len(rows) - neighbours} candidats, {kept} retenus, {neighbours} voisin(s) joint(s) au contexte "
         f"({sum(len(c.content) for c in result.context)} caractères, budget {settings.retrieval_context_chars}).\n"

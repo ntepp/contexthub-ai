@@ -9,7 +9,11 @@ reason (distance above the grounding threshold, beyond ``RETRIEVAL_TOP_K``).
 Product references: when the question cites one (``US30010CNG``), the documents that
 carry it (``hub_documents.product_refs``) are also searched on their own, so that their
 passages compete even when another product's manual is closer in wording, and their
-passages get ``RETRIEVAL_REFERENCE_BOOST`` on the fused score. A question without a
+passages get ``RETRIEVAL_REFERENCE_BOOST`` on the fused score. Passages of documents that
+carry other references only (another product's manual) are then left out; when they were
+all the question had, retrieval answers itself — the exact ``NO_ANSWER_TEXT`` followed by
+``PRODUCT_MISMATCH_TEXT`` naming what the sources are about — and the LLM is not called.
+Documents without any reference are never left out for this reason. A question without a
 reference is searched exactly as before.
 
 Neighbours: a procedure often runs over several passages and pages. Around each kept
@@ -28,7 +32,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from src.config import get_settings
+from src.config import DEFAULT_PRODUCT_MISMATCH, get_settings
 from src.ingestion.references import matching, question_references
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.rerank import rerank
@@ -66,6 +70,8 @@ class Retrieval:
     context: list[RetrievedChunk] = field(default_factory=list)
     vector: list[float] = field(default_factory=list, repr=False)
     collection_ids: list[uuid.UUID] = field(default_factory=list)
+    # Set when every passage the threshold let through is about another product: the answer.
+    notice: str | None = None
 
     def ordered(self) -> list[Candidate]:
         """Kept candidates first, in context order, then the excluded ones in search order."""
@@ -99,9 +105,33 @@ def _classify(candidate: Candidate, asked: list[str], refs: dict[uuid.UUID, list
     candidate.product = PRODUCT_MATCH if candidate.matched_refs else PRODUCT_OTHER
 
 
-async def search(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
-    """Hybrid search, product references, grounding threshold, optional re-ranking, top-k —
-    with reasons."""
+def _other_products(candidates: Sequence[Candidate], refs: dict[uuid.UUID, list[str]], limit: int = 2) -> list[str]:
+    """The first references of each document these candidates come from, best-ranked first."""
+    found: list[str] = []
+    for candidate in candidates:
+        for ref in refs.get(candidate.chunk.document_id, [])[:limit]:
+            if ref not in found:
+                found.append(ref)
+    return found
+
+
+def product_notice(found: Sequence[str], asked: Sequence[str]) -> str:
+    """``NO_ANSWER_TEXT`` followed by what the sources are about (``PRODUCT_MISMATCH_TEXT``)."""
+    settings = get_settings()
+    shown = ", ".join(found[:6]) + ("…" if len(found) > 6 else "")
+    try:
+        detail = settings.product_mismatch_text.format(found=shown, asked=", ".join(asked))
+    except (KeyError, IndexError, ValueError):
+        detail = DEFAULT_PRODUCT_MISMATCH.format(found=shown, asked=", ".join(asked))
+    return f"{settings.no_answer_text} {detail}"
+
+
+async def search(
+    query: str, collection_ids: Sequence[uuid.UUID], references: Sequence[str] | None = None
+) -> Retrieval:
+    """Hybrid search, product references, grounding threshold, optional re-ranking, product
+    filter, top-k — with reasons. ``references``: the product references the question cites
+    (default: those found in ``query``; the planner passes the question's to its sub-queries)."""
     settings = get_settings()
     store = get_store()
     ids = list(collection_ids)
@@ -111,7 +141,7 @@ async def search(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
     )
     candidates = [Candidate(chunk) for chunk in results]
 
-    asked = question_references(query)
+    asked = list(references) if references is not None else question_references(query)
     refs: dict[uuid.UUID, list[str]] = {}
     if asked:
         refs = await asyncio.to_thread(document_references, ids)
@@ -147,6 +177,16 @@ async def search(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
         await asyncio.to_thread(rerank, query, [c.chunk for c in eligible])
     )}
     eligible.sort(key=lambda c: order[c.chunk.id])
+
+    notice = None
+    others = [c for c in eligible if c.product == PRODUCT_OTHER]
+    if others:
+        for candidate in others:
+            shown = ", ".join(refs.get(candidate.chunk.document_id, [])[:2])
+            candidate.reason = f"autre produit ({shown})"
+        eligible = [c for c in eligible if c.product != PRODUCT_OTHER]
+        if not eligible:
+            notice = product_notice(_other_products(others, refs), asked)
     for position, candidate in enumerate(eligible, start=1):
         if position <= settings.retrieval_top_k:
             candidate.status, candidate.final_rank = KEPT, position
@@ -162,6 +202,7 @@ async def search(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
         context=list(kept),
         vector=vector,
         collection_ids=ids,
+        notice=notice,
     )
 
 
@@ -233,9 +274,11 @@ async def expand(
     return context
 
 
-async def retrieve_context(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
+async def retrieve_context(
+    query: str, collection_ids: Sequence[uuid.UUID], references: Sequence[str] | None = None
+) -> Retrieval:
     """What the ``retrieve`` node does: :func:`search`, then the neighbours of the kept passages."""
-    found = await search(query, collection_ids)
+    found = await search(query, collection_ids, references)
     if found.kept:
         found.context = await expand(found.kept, found.vector, found.collection_ids)
     return found
