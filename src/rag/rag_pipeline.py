@@ -34,9 +34,8 @@ from src.config import get_settings
 from src.llm.factory import ModelSpec, parse_model_id, resolve_model
 from src.llm.llm_chain import initialize_model_llm
 from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
-from src.retrieval.embeddings import get_embeddings
-from src.retrieval.rerank import rerank
-from src.retrieval.store import RetrievedChunk, get_store
+from src.rag import retrieval
+from src.retrieval.store import RetrievedChunk
 from src.utils.logging_config import get_logger
 
 log = get_logger()
@@ -265,19 +264,8 @@ def _spec(state: State) -> ModelSpec:
 
 async def _search(query: str, collection_ids: list[uuid.UUID]) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
     """(all candidates, grounded top-k) for one query."""
-    settings = get_settings()
-    vector = await asyncio.to_thread(get_embeddings().embed_query, query)
-    results = await asyncio.to_thread(
-        get_store().search,
-        query,
-        vector,
-        collection_ids,
-        settings.retrieval_candidates,
-        settings.retrieval_hybrid,
-    )
-    kept = [r for r in results if r.distance <= settings.retrieval_max_distance]
-    kept = (await asyncio.to_thread(rerank, query, kept))[: settings.retrieval_top_k]
-    return results, kept
+    found = await retrieval.search(query, collection_ids)
+    return [c.chunk for c in found.candidates], found.kept
 
 
 # ---------------------------------------------------------------------------

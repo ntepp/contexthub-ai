@@ -4,6 +4,7 @@
     python -m src.cli verify-audit
     python -m src.cli purge
     python -m src.cli reindex [--collection NAME]
+    python -m src.cli explain-retrieval --collection NAME "question" [--json] [--limit N] [--excerpt N]
 """
 
 from __future__ import annotations
@@ -88,6 +89,88 @@ def _reindex(args) -> int:
     return 1 if failures else 0
 
 
+_STATUS_LABELS = {"kept": "retenu", "excluded": "exclu"}
+
+
+def _cell(value, width: int, align: str = "<") -> str:
+    text = "-" if value is None else str(value)
+    if len(text) > width:
+        text = text[: width - 1] + "…"
+    return f"{text:{align}{width}}"
+
+
+def _explain_retrieval(args) -> int:
+    import asyncio
+    import uuid
+
+    from src.config import get_settings
+    from src.db.models import Collection
+    from src.db.session import SessionLocal
+    from src.rag.retrieval import describe, search
+
+    db = SessionLocal()
+    try:
+        ids: list[uuid.UUID] = []
+        for wanted in args.collection:
+            query = db.query(Collection).filter(Collection.conversation_id.is_(None))
+            try:
+                found = query.filter(Collection.id == uuid.UUID(wanted)).first()
+            except ValueError:
+                found = query.filter(Collection.name == wanted).first()
+            if found is None:
+                print(f"Collection introuvable : {wanted}", file=sys.stderr)
+                return 1
+            ids.append(found.id)
+    finally:
+        db.close()
+
+    settings = get_settings()
+    result = asyncio.run(search(args.question, ids))
+    rows = describe(result, excerpt=args.excerpt)
+    if args.json:
+        print(json.dumps({"question": args.question, "settings": {
+            "retrieval_max_distance": settings.retrieval_max_distance,
+            "retrieval_top_k": settings.retrieval_top_k,
+            "retrieval_candidates": settings.retrieval_candidates,
+            "retrieval_hybrid": settings.retrieval_hybrid,
+            "reranker": settings.reranker,
+        }, "candidates": rows}, indent=2, ensure_ascii=False))
+        return 0
+
+    kept = sum(1 for row in rows if row["status"] == "kept")
+    print(f"Question : {args.question}")
+    print(
+        f"Réglages : seuil de distance {settings.retrieval_max_distance:.2f}, top_k {settings.retrieval_top_k}, "
+        f"{settings.retrieval_candidates} candidats par liste, hybride {'oui' if settings.retrieval_hybrid else 'non'}, "
+        f"re-classement {settings.reranker}"
+    )
+    print(
+        "Recherche de la question telle quelle : sans reformulation (historique) ni sous-requêtes du planificateur."
+    )
+    print(f"{len(rows)} candidats, {kept} retenus.\n")
+    header = (
+        f"{_cell('rang', 4)} {_cell('statut', 7)} {_cell('distance', 8, '>')} {_cell('vect.', 5, '>')} "
+        f"{_cell('lex.', 5, '>')} {_cell('score lex', 9, '>')} {_cell('RRF', 7, '>')} {_cell('document', 34)} "
+        f"{_cell('page', 4, '>')} {_cell('section', 30)} raison"
+    )
+    print(header)
+    print("-" * len(header))
+    for row in rows[: args.limit] if args.limit else rows:
+        distance, fused = f"{row['distance']:.3f}", f"{row['fused_score']:.4f}"
+        print(
+            f"{_cell(row['final_rank'], 4)} {_cell(_STATUS_LABELS.get(row['status'], row['status']), 7)} "
+            f"{_cell(distance, 8, '>')} {_cell(row['vector_rank'], 5, '>')} "
+            f"{_cell(row['lexical_rank'], 5, '>')} {_cell(row['lexical_score'], 9, '>')} "
+            f"{_cell(fused, 7, '>')} {_cell(row['document'], 34)} "
+            f"{_cell(row['page'], 4, '>')} {_cell(row['section'], 30)} {row['reason'] or ''}"
+        )
+        if row.get("excerpt"):
+            print(f"     « {row['excerpt']} »")
+    if args.limit and len(rows) > args.limit:
+        print(f"… {len(rows) - args.limit} autres candidats (--limit 0 pour tout afficher)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.cli", description="ContextHub — administration")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -104,6 +187,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("reindex", help="réindexer les documents (après changement de modèle d'embedding)")
     p.add_argument("--collection")
     p.set_defaults(func=_reindex)
+
+    p = sub.add_parser(
+        "explain-retrieval",
+        help="diagnostic : candidats d'une question, distance, rangs, passages retenus et raisons d'exclusion",
+    )
+    p.add_argument("question")
+    p.add_argument("--collection", action="append", required=True, help="nom ou UUID (répétable)")
+    p.add_argument("--json", action="store_true", help="sortie JSON")
+    p.add_argument("--limit", type=int, default=30, help="lignes affichées (0 : toutes)")
+    p.add_argument("--excerpt", type=int, default=0, help="afficher N caractères de chaque passage")
+    p.set_defaults(func=_explain_retrieval)
 
     args = parser.parse_args(argv)
     return args.func(args)

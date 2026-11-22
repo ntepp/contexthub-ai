@@ -52,6 +52,12 @@ class RetrievedChunk:
     metadata: dict
     distance: float
     score: float = 0.0
+    # Diagnostics (explain-retrieval): position of the chunk in each list fused by RRF
+    # (None: not in that list), full-text rank value, position in its document.
+    vector_rank: int | None = None
+    lexical_rank: int | None = None
+    lexical_score: float | None = None
+    chunk_index: int | None = None
 
 
 class ChunkStore(Protocol):
@@ -175,7 +181,7 @@ class PgChunkStore:
         lexical_cte = (
             """
             lex AS (
-                SELECT id, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) AS r
+                SELECT id, ts_rank_cd(tsv, q) AS s, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) AS r
                 FROM hub_chunks, to_tsquery(CAST(:lang AS regconfig), :tsq) q
                 WHERE collection_id = ANY(CAST(:cids AS uuid[])) AND tsv @@ q
                 ORDER BY ts_rank_cd(tsv, q) DESC
@@ -183,7 +189,7 @@ class PgChunkStore:
             )
             """
             if terms
-            else "lex AS (SELECT NULL::uuid AS id, NULL::bigint AS r WHERE false)"
+            else "lex AS (SELECT NULL::uuid AS id, NULL::real AS s, NULL::bigint AS r WHERE false)"
         )
         sql = f"""
             WITH vec AS (
@@ -196,7 +202,8 @@ class PgChunkStore:
                 ) v
             ),
             {lexical_cte}
-            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata,
+            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata, c.chunk_index,
+                   vec.r AS vector_rank, lex.r AS lexical_rank, lex.s AS lexical_score,
                    (c.embedding <=> CAST(:qvec AS vector)) AS distance,
                    COALESCE(1.0 / (:rrf_k + vec.r), 0) + COALESCE(1.0 / (:rrf_k + lex.r), 0) AS score
             FROM hub_chunks c
@@ -219,6 +226,10 @@ class PgChunkStore:
                 metadata=row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"]),
                 distance=float(row["distance"]),
                 score=float(row["score"]),
+                vector_rank=row["vector_rank"],
+                lexical_rank=row["lexical_rank"],
+                lexical_score=None if row["lexical_score"] is None else float(row["lexical_score"]),
+                chunk_index=row["chunk_index"],
             )
             for row in rows
         ]
@@ -262,6 +273,7 @@ class InMemoryChunkStore:
         by_distance = sorted(pool, key=lambda c: self._cosine_distance(query_embedding, c.embedding))[:candidates]
         ranks_vec = {c.id: i + 1 for i, c in enumerate(by_distance)}
         ranks_lex: dict[uuid.UUID, int] = {}
+        hits_lex: dict[uuid.UUID, int] = {}
         terms = lexical_terms(query_text) if hybrid else []
         if terms:
             scored = []
@@ -272,6 +284,7 @@ class InMemoryChunkStore:
                     scored.append((hits, c))
             scored.sort(key=lambda x: -x[0])
             ranks_lex = {c.id: i + 1 for i, (_, c) in enumerate(scored[:candidates])}
+            hits_lex = {c.id: hits for hits, c in scored[:candidates]}
         ids = set(ranks_vec) | set(ranks_lex)
         results = []
         for cid in ids:
@@ -290,6 +303,10 @@ class InMemoryChunkStore:
                     metadata=dict(c.metadata),
                     distance=self._cosine_distance(query_embedding, c.embedding),
                     score=score,
+                    vector_rank=ranks_vec.get(cid),
+                    lexical_rank=ranks_lex.get(cid),
+                    lexical_score=float(hits_lex[cid]) if cid in hits_lex else None,
+                    chunk_index=c.chunk_index,
                 )
             )
         results.sort(key=lambda r: (-r.score, r.distance))
