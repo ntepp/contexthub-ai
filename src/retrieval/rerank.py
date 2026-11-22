@@ -6,6 +6,7 @@ Requires the optional dependency set in ``requirements-rerank.txt``
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from src.config import get_settings
@@ -17,15 +18,28 @@ log = get_logger()
 
 @lru_cache
 def _cross_encoder():
+    settings = get_settings()
+    if settings.hf_hub_offline:
+        # Read by huggingface_hub when it is first imported: no call to the Hub at all, the
+        # model is read from the local cache only (sovereign deployments, offline sites).
+        os.environ["HF_HUB_OFFLINE"] = "1"
     try:
         from sentence_transformers import CrossEncoder
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
             "RERANKER=cross_encoder requiert sentence-transformers : pip install -r requirements-rerank.txt"
         ) from exc
-    model = get_settings().reranker_model
-    log.info("[rerank] chargement du cross-encoder %s", model)
-    return CrossEncoder(model)
+    model = settings.reranker_model
+    log.info("[rerank] chargement du cross-encoder %s%s", model, " (hors ligne)" if settings.hf_hub_offline else "")
+    try:
+        return CrossEncoder(model, local_files_only=settings.hf_hub_offline)
+    except OSError as exc:
+        if not settings.hf_hub_offline:
+            raise
+        raise RuntimeError(
+            f"Modèle de re-classement {model} absent du cache local (HF_HUB_OFFLINE=1) : "
+            "téléchargez-le une fois avec HF_HUB_OFFLINE=0, ou copiez le cache HuggingFace sur le serveur."
+        ) from exc
 
 
 def rerank(question: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
