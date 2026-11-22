@@ -11,6 +11,12 @@ carry it (``hub_documents.product_refs``) are also searched on their own, so tha
 passages compete even when another product's manual is closer in wording, and their
 passages get ``RETRIEVAL_REFERENCE_BOOST`` on the fused score. A question without a
 reference is searched exactly as before.
+
+Neighbours: a procedure often runs over several passages and pages. Around each kept
+passage, the adjacent passages of the same document and section (``RETRIEVAL_NEIGHBOURS``
+on each side, pages next to each other) join the context, best-ranked passages first, within
+``RETRIEVAL_CONTEXT_CHARS``. They only ever come with a kept passage: the grounding
+threshold still decides alone whether the question is answered.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from src.retrieval.store import RetrievedChunk, get_store
 
 KEPT = "kept"
 EXCLUDED = "excluded"
+NEIGHBOUR = "neighbour"
 # How a candidate's document relates to the references cited by the question.
 PRODUCT_MATCH = "match"  # the document carries one of them
 PRODUCT_OTHER = "other"  # the document carries references, none of them
@@ -55,6 +62,10 @@ class Retrieval:
     kept: list[RetrievedChunk] = field(default_factory=list)
     asked_refs: list[str] = field(default_factory=list)  # references cited by the question
     document_refs: dict[uuid.UUID, list[str]] = field(default_factory=dict)  # searched documents' references
+    # What the LLM reads: the kept passages and their neighbours (see expand()).
+    context: list[RetrievedChunk] = field(default_factory=list)
+    vector: list[float] = field(default_factory=list, repr=False)
+    collection_ids: list[uuid.UUID] = field(default_factory=list)
 
     def ordered(self) -> list[Candidate]:
         """Kept candidates first, in context order, then the excluded ones in search order."""
@@ -142,7 +153,92 @@ async def search(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
         else:
             candidate.reason = f"au-delà du top_k (rang {position} > {settings.retrieval_top_k})"
     kept = [c.chunk for c in eligible[: settings.retrieval_top_k]]
-    return Retrieval(query=query, candidates=candidates, kept=kept, asked_refs=asked, document_refs=refs)
+    return Retrieval(
+        query=query,
+        candidates=candidates,
+        kept=kept,
+        asked_refs=asked,
+        document_refs=refs,
+        context=list(kept),
+        vector=vector,
+        collection_ids=ids,
+    )
+
+
+def _next_pages(anchor: RetrievedChunk, other: RetrievedChunk) -> bool:
+    a, b = (anchor.metadata or {}).get("page"), (other.metadata or {}).get("page")
+    return a is None or b is None or abs(a - b) <= 1
+
+
+def _same_section(anchor: RetrievedChunk, other: RetrievedChunk) -> bool:
+    """A long section cut into passages, not the next article or the next procedure."""
+    return (anchor.metadata or {}).get("section_path") == (other.metadata or {}).get("section_path")
+
+
+async def expand(
+    anchors: Sequence[RetrievedChunk], vector: list[float], collection_ids: Sequence[uuid.UUID]
+) -> list[RetrievedChunk]:
+    """``anchors`` with their adjacent passages: the passages right before and after each one
+    in its document and section (each on the page of the passage next to it or the page
+    after / before), best-ranked anchors served first, nearest
+    neighbours first, within ``RETRIEVAL_CONTEXT_CHARS``; each anchor followed by its
+    neighbours in document order. Anchors are never dropped."""
+    settings = get_settings()
+    depth = settings.retrieval_neighbours
+    anchors = list(anchors)
+    present = {(a.document_id, a.chunk_index) for a in anchors if a.chunk_index is not None}
+    wanted = {
+        (doc_id, index + step * side)
+        for doc_id, index in present
+        for step in range(1, depth + 1)
+        for side in (-1, 1)
+        if index + step * side >= 0
+    } - present
+    if depth <= 0 or not wanted:
+        return anchors
+    found = await asyncio.to_thread(get_store().fetch, sorted(wanted), vector, list(collection_ids))
+    at = {(c.document_id, c.chunk_index): c for c in found}
+    budget = settings.retrieval_context_chars - sum(len(a.content) for a in anchors)
+    chosen: dict[tuple[uuid.UUID, int], RetrievedChunk] = {}
+    for step in range(1, depth + 1):
+        for anchor in anchors:
+            if anchor.chunk_index is None:
+                continue
+            for side in (-1, 1):
+                position = (anchor.document_id, anchor.chunk_index + step * side)
+                between = (anchor.document_id, anchor.chunk_index + (step - 1) * side)
+                chunk = at.get(position)
+                if chunk is None or position in chosen or position in present:
+                    continue
+                if step > 1 and between not in chosen and between not in present:
+                    continue  # only contiguous runs: never skip a passage
+                # Pages next to each other along the run (a long section stays on one page).
+                if (
+                    not _same_section(anchor, chunk)
+                    or not _next_pages(at.get(between) or anchor, chunk)
+                    or len(chunk.content) > budget
+                ):
+                    continue
+                budget -= len(chunk.content)
+                chunk.neighbour_of = anchor.id
+                chosen[position] = chunk
+    context: list[RetrievedChunk] = []
+    seen: set[uuid.UUID] = set()
+    for anchor in anchors:
+        group = [anchor] + [c for c in chosen.values() if c.neighbour_of == anchor.id]
+        for chunk in sorted(group, key=lambda c: c.chunk_index if c.chunk_index is not None else -1):
+            if chunk.id not in seen:
+                seen.add(chunk.id)
+                context.append(chunk)
+    return context
+
+
+async def retrieve_context(query: str, collection_ids: Sequence[uuid.UUID]) -> Retrieval:
+    """What the ``retrieve`` node does: :func:`search`, then the neighbours of the kept passages."""
+    found = await search(query, collection_ids)
+    if found.kept:
+        found.context = await expand(found.kept, found.vector, found.collection_ids)
+    return found
 
 
 def _excerpt(content: str, size: int) -> str:
@@ -150,13 +246,37 @@ def _excerpt(content: str, size: int) -> str:
     return " ".join(body.split())[:size]
 
 
+def _product_of(found: Retrieval, chunk: RetrievedChunk) -> dict:
+    probe = Candidate(chunk)
+    _classify(probe, found.asked_refs, found.document_refs)
+    return {"product": probe.product, "matched_refs": probe.matched_refs}
+
+
 def describe(found: Retrieval, excerpt: int = 0) -> list[dict]:
-    """One JSON-ready row per candidate, kept ones first (diagnostic output)."""
+    """One JSON-ready row per candidate, kept ones first, then the neighbours joined to the
+    context, then the excluded candidates (diagnostic output)."""
+    position = {chunk.id: index for index, chunk in enumerate(found.context, start=1)}
+    rank = {chunk.id: index for index, chunk in enumerate(found.kept, start=1)}
+    neighbours = [
+        Candidate(
+            chunk,
+            status=NEIGHBOUR,
+            reason=f"voisin du passage retenu n° {rank.get(chunk.neighbour_of, '?')}",
+            **_product_of(found, chunk),
+        )
+        for chunk in found.context
+        if chunk.neighbour_of is not None
+    ]
+    ordered = found.ordered()
+    kept = [c for c in ordered if c.status == KEPT]
     rows = []
-    for candidate in found.ordered():
+    # An excluded candidate joined as a neighbour is listed once, as a neighbour.
+    excluded = [c for c in ordered if c.status != KEPT and c.chunk.id not in position]
+    for candidate in kept + neighbours + excluded:
         chunk, meta = candidate.chunk, candidate.chunk.metadata or {}
         row = {
             "final_rank": candidate.final_rank,
+            "context_position": position.get(chunk.id),
             "status": candidate.status,
             "distance": round(chunk.distance, 4),
             "vector_rank": chunk.vector_rank,

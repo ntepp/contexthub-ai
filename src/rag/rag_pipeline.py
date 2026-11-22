@@ -35,6 +35,7 @@ from src.llm.factory import ModelSpec, parse_model_id, resolve_model
 from src.llm.llm_chain import initialize_model_llm
 from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
 from src.rag import retrieval
+from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import RetrievedChunk
 from src.utils.logging_config import get_logger
 
@@ -107,6 +108,9 @@ class State(TypedDict, total=False):
     user_id: str
     standalone_question: str
     search_queries: list[str]
+    # Kept passages, best first (the planner merges its sub-queries' with these), and the
+    # context the LLM reads: the same passages with their neighbours.
+    anchors: list[RetrievedChunk]
     context: list[RetrievedChunk]
     answer: str | None
     sources: list[dict]
@@ -182,6 +186,8 @@ def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
                 "section_path": meta.get("section_path") or [],
                 "snippet": body[:600],
                 "distance": round(chunk.distance, 4),
+                # Joined for being next to a kept passage (same document), not found by the search.
+                "neighbour": chunk.neighbour_of is not None,
                 "url": meta.get("source_url"),
                 "source_kind": meta.get("source_kind"),
                 "cited": False,
@@ -295,7 +301,8 @@ async def retrieve(state: State) -> dict:
     query = state.get("standalone_question") or state["question"]
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
 
-    results, kept = await _search(query, collection_ids)
+    found = await retrieval.retrieve_context(query, collection_ids)
+    results, kept = [c.chunk for c in found.candidates], found.kept
 
     log.info(
         "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
@@ -312,17 +319,21 @@ async def retrieve(state: State) -> dict:
         log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
             "search_queries": [query],
+            "anchors": [],
             "context": [],
             "answer": no_answer_text(),
             "sources": [],
             "confidence_metric": 0.0,
             "refused": True,
         }
+    if len(found.context) > len(kept):
+        log.info("[retrieve] %d passage(s) voisin(s) joint(s) au contexte", len(found.context) - len(kept))
     return {
         "search_queries": [query],
-        "context": kept,
+        "anchors": kept,
+        "context": found.context,
         "answer": None,
-        "sources": build_sources(kept),
+        "sources": build_sources(found.context),
         "confidence_metric": confidence_from(kept),
         "refused": False,
     }
@@ -348,8 +359,10 @@ async def plan(state: State) -> dict:
 
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
     extra = await asyncio.gather(*(_search(q, collection_ids) for q in queries[1:]))
-    rankings = [state["context"]] + [kept for _, kept in extra]
+    rankings = [state.get("anchors") or state["context"]] + [kept for _, kept in extra]
     merged = interleave(rankings, settings.retrieval_top_k)
+    vector = await asyncio.to_thread(get_embeddings().embed_query, question)
+    context = await retrieval.expand(merged, vector, collection_ids)
     RAG_RETAINED_CHUNKS.observe(len(merged))
     log.info(
         "[plan] %d recherches : %s — retenus par recherche : %s",
@@ -359,8 +372,9 @@ async def plan(state: State) -> dict:
     )
     return {
         "search_queries": queries,
-        "context": merged,
-        "sources": build_sources(merged),
+        "anchors": merged,
+        "context": context,
+        "sources": build_sources(context),
         "confidence_metric": confidence_from(merged),
     }
 

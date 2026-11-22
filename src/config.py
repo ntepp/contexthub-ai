@@ -187,6 +187,11 @@ class Settings(BaseSettings):
     # Added to the fused (RRF) score of the passages of documents carrying a product reference
     # cited by the question (US30010CNG…); 1/(RRF_K+1) is what a first rank in one list brings.
     retrieval_reference_boost: float = 0.02
+    # Adjacent passages (same document, pages next to each other) joined around each kept
+    # passage, on each side, so that a procedure spread over several passages is read whole
+    # (0 = none); within a budget for the whole context sent to the LLM, in characters.
+    retrieval_neighbours: int = 1
+    retrieval_context_chars: int = 12000
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     history_turns: int = 4

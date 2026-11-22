@@ -89,7 +89,7 @@ def _reindex(args) -> int:
     return 1 if failures else 0
 
 
-_STATUS_LABELS = {"kept": "retenu", "excluded": "exclu"}
+_STATUS_LABELS = {"kept": "retenu", "excluded": "exclu", "neighbour": "voisin"}
 
 
 def _product_cell(row: dict) -> str:
@@ -118,7 +118,7 @@ def _explain_retrieval(args) -> int:
     from src.config import get_settings
     from src.db.models import Collection
     from src.db.session import SessionLocal
-    from src.rag.retrieval import describe, search
+    from src.rag.retrieval import describe, retrieve_context
 
     db = SessionLocal()
     try:
@@ -137,7 +137,7 @@ def _explain_retrieval(args) -> int:
         db.close()
 
     settings = get_settings()
-    result = asyncio.run(search(args.question, ids))
+    result = asyncio.run(retrieve_context(args.question, ids))
     rows = describe(result, excerpt=args.excerpt)
     if args.json:
         print(json.dumps({"question": args.question, "settings": {
@@ -147,10 +147,13 @@ def _explain_retrieval(args) -> int:
             "retrieval_hybrid": settings.retrieval_hybrid,
             "reranker": settings.reranker,
             "retrieval_reference_boost": settings.retrieval_reference_boost,
+            "retrieval_neighbours": settings.retrieval_neighbours,
+            "retrieval_context_chars": settings.retrieval_context_chars,
         }, "asked_refs": result.asked_refs, "candidates": rows}, indent=2, ensure_ascii=False))
         return 0
 
     kept = sum(1 for row in rows if row["status"] == "kept")
+    neighbours = sum(1 for row in rows if row["status"] == "neighbour")
     print(f"Question : {args.question}")
     print(
         f"Réglages : seuil de distance {settings.retrieval_max_distance:.2f}, top_k {settings.retrieval_top_k}, "
@@ -167,9 +170,12 @@ def _explain_retrieval(args) -> int:
             "dans les collections ; « = » : le document porte la référence, « autre » : il en porte d'autres, "
             "« (réf.) » : trouvé par la recherche limitée aux documents qui la portent."
         )
-    print(f"{len(rows)} candidats, {kept} retenus.\n")
+    print(
+        f"{len(rows) - neighbours} candidats, {kept} retenus, {neighbours} voisin(s) joint(s) au contexte "
+        f"({sum(len(c.content) for c in result.context)} caractères, budget {settings.retrieval_context_chars}).\n"
+    )
     header = (
-        f"{_cell('rang', 4)} {_cell('statut', 7)} {_cell('distance', 8, '>')} {_cell('vect.', 5, '>')} "
+        f"{_cell('rang', 4)} {_cell('ctx', 3)} {_cell('statut', 7)} {_cell('distance', 8, '>')} {_cell('vect.', 5, '>')} "
         f"{_cell('lex.', 5, '>')} {_cell('score lex', 9, '>')} {_cell('RRF', 7, '>')} {_cell('document', 34)} "
         f"{_cell('page', 4, '>')} {_cell('section', 30)} {_cell('produit', 18)} raison"
     )
@@ -178,7 +184,8 @@ def _explain_retrieval(args) -> int:
     for row in rows[: args.limit] if args.limit else rows:
         distance, fused = f"{row['distance']:.3f}", f"{row['fused_score']:.4f}"
         print(
-            f"{_cell(row['final_rank'], 4)} {_cell(_STATUS_LABELS.get(row['status'], row['status']), 7)} "
+            f"{_cell(row['final_rank'], 4)} {_cell(row['context_position'], 3)} "
+            f"{_cell(_STATUS_LABELS.get(row['status'], row['status']), 7)} "
             f"{_cell(distance, 8, '>')} {_cell(row['vector_rank'], 5, '>')} "
             f"{_cell(row['lexical_rank'], 5, '>')} {_cell(row['lexical_score'], 9, '>')} "
             f"{_cell(fused, 7, '>')} {_cell(row['document'], 34)} "

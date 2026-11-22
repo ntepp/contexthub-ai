@@ -6,7 +6,7 @@ import json
 import pytest
 
 from src import cli
-from src.config import reset_settings_cache
+from src.config import get_settings, reset_settings_cache
 from src.rag.rag_pipeline import retrieve
 from tests.conftest import upload
 from tests.fakes import make_pdf
@@ -43,7 +43,8 @@ def _explain(capsys, *args) -> tuple[int, str]:
     return code, capsys.readouterr().out
 
 
-def test_every_candidate_comes_with_its_fate(indexed, capsys, top_k_one):
+def test_every_candidate_comes_with_its_fate(indexed, capsys, top_k_one, monkeypatch):
+    monkeypatch.setattr(get_settings(), "retrieval_neighbours", 0)
     code, out = _explain(capsys, "--collection", indexed["name"], "--json", "--excerpt", "120", QUESTION)
     assert code == 0
     report = json.loads(out)
@@ -73,7 +74,13 @@ def test_table_output_and_parity_with_the_chat(indexed, capsys, top_k_one):
     state = asyncio.run(retrieve({"question": QUESTION, "collection_ids": [indexed["id"]]}))
     report = json.loads(_explain(capsys, "--collection", indexed["name"], "--json", QUESTION)[1])
     kept = [r["document_id"] + str(r["chunk_index"]) for r in report["candidates"] if r["status"] == "kept"]
-    assert kept == [str(c.document_id) + str(c.chunk_index) for c in state["context"]]
+    assert kept == [str(c.document_id) + str(c.chunk_index) for c in state["anchors"]]
+    in_context = sorted(
+        (r["context_position"], r["document_id"] + str(r["chunk_index"]))
+        for r in report["candidates"]
+        if r["context_position"]
+    )
+    assert [key for _, key in in_context] == [str(c.document_id) + str(c.chunk_index) for c in state["context"]]
 
 
 def test_unknown_or_session_collection_is_refused(indexed, capsys, db, admin_user):

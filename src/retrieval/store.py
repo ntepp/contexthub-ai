@@ -58,6 +58,8 @@ class RetrievedChunk:
     lexical_rank: int | None = None
     lexical_score: float | None = None
     chunk_index: int | None = None
+    # Set on a passage joined to the context for being next to a kept one (that one's id).
+    neighbour_of: uuid.UUID | None = None
 
 
 class ChunkStore(Protocol):
@@ -79,6 +81,15 @@ class ChunkStore(Protocol):
         document_ids: Sequence[uuid.UUID] | None = None,
     ) -> list[RetrievedChunk]:
         """``document_ids``: search only these documents (still within ``collection_ids``)."""
+        ...
+
+    def fetch(
+        self,
+        positions: Sequence[tuple[uuid.UUID, int]],
+        query_embedding: list[float],
+        collection_ids: Sequence[uuid.UUID],
+    ) -> list[RetrievedChunk]:
+        """Chunks at these (document, chunk index) positions, with their distance to the query."""
         ...
 
 
@@ -242,6 +253,45 @@ class PgChunkStore:
             for row in rows
         ]
 
+    def fetch(self, positions, query_embedding, collection_ids) -> list[RetrievedChunk]:
+        if not positions or not collection_ids:
+            return []
+        with get_engine().connect() as conn:
+            rows = _fetch_rows(conn, positions, query_embedding, collection_ids)
+        return [
+            RetrievedChunk(
+                id=row["id"] if isinstance(row["id"], uuid.UUID) else uuid.UUID(str(row["id"])),
+                document_id=uuid.UUID(str(row["document_id"])),
+                collection_id=uuid.UUID(str(row["collection_id"])),
+                content=row["content"],
+                metadata=row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"]),
+                distance=float(row["distance"]),
+                chunk_index=row["chunk_index"],
+            )
+            for row in rows
+        ]
+
+
+def _fetch_rows(conn, positions, query_embedding, collection_ids):
+    return conn.execute(
+        text(
+            """
+            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata, c.chunk_index,
+                   (c.embedding <=> CAST(:qvec AS vector)) AS distance
+            FROM hub_chunks c
+            JOIN unnest(CAST(:dids AS uuid[]), CAST(:idx AS int[])) AS p(document_id, chunk_index)
+              ON c.document_id = p.document_id AND c.chunk_index = p.chunk_index
+            WHERE c.collection_id = ANY(CAST(:cids AS uuid[]))
+            """
+        ),
+        {
+            "qvec": _vector_literal(query_embedding),
+            "dids": [str(d) for d, _ in positions],
+            "idx": [int(i) for _, i in positions],
+            "cids": [str(c) for c in collection_ids],
+        },
+    ).mappings().all()
+
 
 class InMemoryChunkStore:
     """Reference implementation used by the test-suite (same contract as PgChunkStore)."""
@@ -321,6 +371,22 @@ class InMemoryChunkStore:
             )
         results.sort(key=lambda r: (-r.score, r.distance))
         return results
+
+    def fetch(self, positions, query_embedding, collection_ids) -> list[RetrievedChunk]:
+        wanted, allowed = set(positions), set(collection_ids)
+        return [
+            RetrievedChunk(
+                id=c.id,
+                document_id=c.document_id,
+                collection_id=c.collection_id,
+                content=c.content,
+                metadata=dict(c.metadata),
+                distance=self._cosine_distance(query_embedding, c.embedding),
+                chunk_index=c.chunk_index,
+            )
+            for c in self.chunks.values()
+            if (c.document_id, c.chunk_index) in wanted and c.collection_id in allowed
+        ]
 
 
 _store_override: ChunkStore | None = None
