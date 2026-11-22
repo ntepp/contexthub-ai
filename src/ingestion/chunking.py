@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import bisect
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -234,14 +235,26 @@ def _emit(
     return chunks
 
 
+def context_label(doc_label: str | None, references: Sequence[str] = ()) -> str | None:
+    """What heads every passage of a document: its label and its prominent product references."""
+    refs = ", ".join(r for r in references if not doc_label or r not in doc_label)
+    if doc_label and refs:
+        return f"{doc_label} — {refs}"
+    return doc_label or refs or None
+
+
 def chunk_pages(
     pages: list[PageText],
     chunk_size: int = 1200,
     chunk_overlap: int = 150,
     doc_label: str | None = None,
     split_definitions: bool = True,
+    references: Sequence[str] = (),
 ) -> list[Chunk]:
-    """``doc_label`` (e.g. "MiFID II — Directive 2014/65/UE") heads every chunk's path."""
+    """``doc_label`` (e.g. "MiFID II — Directive 2014/65/UE") and the document's prominent
+    product ``references`` head every chunk's path, so that the embedding and the full-text
+    index of each passage know which document and which product it belongs to."""
+    doc_label = context_label(doc_label, references)
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks: list[Chunk] = []
     for section in _sections(pages):

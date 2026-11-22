@@ -188,6 +188,9 @@ class Document(Base):
     ocr_pages: Mapped[int] = mapped_column(Integer, default=0)
     ocr_confidence: Mapped[float | None] = mapped_column(Float)
     ocr_low_pages: Mapped[list | None] = mapped_column(JSONType)  # 1-based page numbers
+    # Product references (model / part numbers) the document cites, most prominent first; a
+    # question citing one of them favours the document at retrieval (src/ingestion/references.py).
+    product_refs: Mapped[list | None] = mapped_column(JSONType)
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     task_id: Mapped[str | None] = mapped_column(String(255))

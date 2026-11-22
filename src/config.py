@@ -181,6 +181,9 @@ class Settings(BaseSettings):
     retrieval_hybrid: bool = True
     fts_language: str = "fr_unaccent"
     rrf_k: int = 60
+    # Added to the fused (RRF) score of the passages of documents carrying a product reference
+    # cited by the question (US30010CNG…); 1/(RRF_K+1) is what a first rank in one list brings.
+    retrieval_reference_boost: float = 0.02
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     history_turns: int = 4

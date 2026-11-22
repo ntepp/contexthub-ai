@@ -76,7 +76,10 @@ class ChunkStore(Protocol):
         collection_ids: Sequence[uuid.UUID],
         candidates: int,
         hybrid: bool,
-    ) -> list[RetrievedChunk]: ...
+        document_ids: Sequence[uuid.UUID] | None = None,
+    ) -> list[RetrievedChunk]:
+        """``document_ids``: search only these documents (still within ``collection_ids``)."""
+        ...
 
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -163,8 +166,9 @@ class PgChunkStore:
         collection_ids: Sequence[uuid.UUID],
         candidates: int,
         hybrid: bool,
+        document_ids: Sequence[uuid.UUID] | None = None,
     ) -> list[RetrievedChunk]:
-        if not collection_ids:
+        if not collection_ids or document_ids is not None and not document_ids:
             return []
         settings = get_settings()
         terms = lexical_terms(query_text) if hybrid else []
@@ -178,12 +182,16 @@ class PgChunkStore:
             # "Définitions" (stem "definit").
             "tsq": " | ".join(f"{t}:*" if len(t) >= 5 and not t.isdigit() else t for t in terms),
         }
+        scope = "collection_id = ANY(CAST(:cids AS uuid[]))"
+        if document_ids is not None:
+            scope += " AND document_id = ANY(CAST(:dids AS uuid[]))"
+            params["dids"] = [str(d) for d in document_ids]
         lexical_cte = (
-            """
+            f"""
             lex AS (
                 SELECT id, ts_rank_cd(tsv, q) AS s, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) AS r
                 FROM hub_chunks, to_tsquery(CAST(:lang AS regconfig), :tsq) q
-                WHERE collection_id = ANY(CAST(:cids AS uuid[])) AND tsv @@ q
+                WHERE {scope} AND tsv @@ q
                 ORDER BY ts_rank_cd(tsv, q) DESC
                 LIMIT :n
             )
@@ -196,7 +204,7 @@ class PgChunkStore:
                 SELECT id, row_number() OVER (ORDER BY embedding <=> CAST(:qvec AS vector)) AS r
                 FROM (
                     SELECT id, embedding FROM hub_chunks
-                    WHERE collection_id = ANY(CAST(:cids AS uuid[]))
+                    WHERE {scope}
                     ORDER BY embedding <=> CAST(:qvec AS vector)
                     LIMIT :n
                 ) v
@@ -267,9 +275,11 @@ class InMemoryChunkStore:
         nb = math.sqrt(sum(y * y for y in b)) or 1.0
         return 1.0 - dot / (na * nb)
 
-    def search(self, query_text, query_embedding, collection_ids, candidates, hybrid):
+    def search(self, query_text, query_embedding, collection_ids, candidates, hybrid, document_ids=None):
         settings = get_settings()
         pool = [c for c in self.chunks.values() if c.collection_id in set(collection_ids)]
+        if document_ids is not None:
+            pool = [c for c in pool if c.document_id in set(document_ids)]
         by_distance = sorted(pool, key=lambda c: self._cosine_distance(query_embedding, c.embedding))[:candidates]
         ranks_vec = {c.id: i + 1 for i, c in enumerate(by_distance)}
         ranks_lex: dict[uuid.UUID, int] = {}

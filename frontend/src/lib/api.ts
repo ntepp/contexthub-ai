@@ -89,6 +89,8 @@ export interface StoredDocument {
   ocr_confidence: number | null
   /** Badly read or unread pages (1-based). */
   ocr_low_pages: number[]
+  /** Product references (model / part numbers) the document cites, most prominent first. */
+  product_refs?: string[]
   /** PDF or image with its original file: OCR can be run again. */
   ocr_eligible: boolean
   progress: { current: number; total: number }

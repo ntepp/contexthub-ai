@@ -92,6 +92,18 @@ def _reindex(args) -> int:
 _STATUS_LABELS = {"kept": "retenu", "excluded": "exclu"}
 
 
+def _product_cell(row: dict) -> str:
+    if row["product"] == "match":
+        label = "= " + ", ".join(row["matched_refs"][:2])
+    elif row["product"] == "other":
+        label = "autre"
+    else:
+        label = None
+    if row["via_reference"]:
+        label = f"{label} (réf.)"
+    return label
+
+
 def _cell(value, width: int, align: str = "<") -> str:
     text = "-" if value is None else str(value)
     if len(text) > width:
@@ -134,7 +146,8 @@ def _explain_retrieval(args) -> int:
             "retrieval_candidates": settings.retrieval_candidates,
             "retrieval_hybrid": settings.retrieval_hybrid,
             "reranker": settings.reranker,
-        }, "candidates": rows}, indent=2, ensure_ascii=False))
+            "retrieval_reference_boost": settings.retrieval_reference_boost,
+        }, "asked_refs": result.asked_refs, "candidates": rows}, indent=2, ensure_ascii=False))
         return 0
 
     kept = sum(1 for row in rows if row["status"] == "kept")
@@ -147,11 +160,18 @@ def _explain_retrieval(args) -> int:
     print(
         "Recherche de la question telle quelle : sans reformulation (historique) ni sous-requêtes du planificateur."
     )
+    if result.asked_refs:
+        carrying = len(result.document_refs)
+        print(
+            f"Références citées : {', '.join(result.asked_refs)} — {carrying} document(s) avec des références "
+            "dans les collections ; « = » : le document porte la référence, « autre » : il en porte d'autres, "
+            "« (réf.) » : trouvé par la recherche limitée aux documents qui la portent."
+        )
     print(f"{len(rows)} candidats, {kept} retenus.\n")
     header = (
         f"{_cell('rang', 4)} {_cell('statut', 7)} {_cell('distance', 8, '>')} {_cell('vect.', 5, '>')} "
         f"{_cell('lex.', 5, '>')} {_cell('score lex', 9, '>')} {_cell('RRF', 7, '>')} {_cell('document', 34)} "
-        f"{_cell('page', 4, '>')} {_cell('section', 30)} raison"
+        f"{_cell('page', 4, '>')} {_cell('section', 30)} {_cell('produit', 18)} raison"
     )
     print(header)
     print("-" * len(header))
@@ -162,7 +182,8 @@ def _explain_retrieval(args) -> int:
             f"{_cell(distance, 8, '>')} {_cell(row['vector_rank'], 5, '>')} "
             f"{_cell(row['lexical_rank'], 5, '>')} {_cell(row['lexical_score'], 9, '>')} "
             f"{_cell(fused, 7, '>')} {_cell(row['document'], 34)} "
-            f"{_cell(row['page'], 4, '>')} {_cell(row['section'], 30)} {row['reason'] or ''}"
+            f"{_cell(row['page'], 4, '>')} {_cell(row['section'], 30)} {_cell(_product_cell(row), 18)} "
+            f"{row['reason'] or ''}"
         )
         if row.get("excerpt"):
             print(f"     « {row['excerpt']} »")
