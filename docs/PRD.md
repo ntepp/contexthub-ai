@@ -4,7 +4,7 @@
 |---|---|
 | **Statut** | v1.0 livrée sur `master` (PR #2, 2026-10-19) ; évolutions livrées fonctionnalité par fonctionnalité (§13) |
 | **Auteur** | ntepp |
-| **Dernière mise à jour** | 2026-11-21 |
+| **Dernière mise à jour** | 2026-11-22 |
 | **Licence produit** | MIT (open source) ; revenus par les services et le support |
 
 ---
@@ -100,6 +100,7 @@ que le produit leur soit réservé.
 | DOC-10 | Reconnaissance des actes européens et de leur nom d'usage, transverses (RGPD, AI Act, NIS 2…) et sectoriels (MiFID II, DORA…) | Should |
 | DOC-11 | Découpage des définitions : un passage par définition (articles « Définitions », glossaires, lexiques), phrase d'introduction répétée, terme dans le chemin de section | Should |
 | DOC-12 | Connecteurs à chaud (Confluence Cloud / Data Center, Notion) : l'utilisateur joint des pages à une conversation, par lien ou par recherche filtrée (mots, espace, étiquette) ; aucune synchronisation en masse ; les pages sont supprimées avec la conversation ; la citation ouvre la page dans son outil d'origine | Should |
+| DOC-13 | Documents techniques (manuels, procédures, fiches produit) : une page PDF dont la couche texte est inexploitable (glyphes sans table Unicode, étiquettes d'un schéma dont le texte est une image) est lue par OCR comme une page vide (`OCR_MIN_TEXT_QUALITY`) ; découpage par sections numérotées (« 3.2.2 Titre »), paragraphes, tableaux et légendes, passages adaptés (`CHUNK_SIZE_TECHNICAL`) ; titre du document et chemin de section en tête de chaque passage indexé et transmis au LLM, sans changer les citations ; en-têtes et pieds de page répétés retirés des passages ; découpage juridique inchangé | Should |
 | DOC-5 | Suppression d'un document (fichier, vecteurs, métadonnées) | Must |
 | DOC-6 | Suppression d'une collection complète | Must |
 | DOC-7 | Ingestion idempotente : un retry ne crée jamais de doublons | Must |
@@ -120,6 +121,9 @@ que le produit leur soit réservé.
 | QA-9 | Retour utilisateur 👍 / 👎 sur chaque réponse | Should |
 | QA-10 | Re-ranking optionnel (cross-encoder) | Could |
 | QA-11 | Contexte métier configurable par instance (`ASSISTANT_CONTEXT`), sans jamais lever les règles d'ancrage | Should |
+| QA-13 | Références produit : identifiants de modèle extraits de chaque document (y compris la notation factorisée `US30010/15/20/30/40CNG` → US30010CNG … US30040CNG), conservés sur le document et en tête de ses passages ; une question qui cite une référence favorise les documents qui la portent et écarte les passages d'un autre produit ; si toutes les sources concernent un autre produit, la réponse le dit (refus `NO_ANSWER_TEXT` suivi de la mention des produits trouvés, sans appel au LLM) ; sans effet pour une question sans référence. Générique, aucune règle propre à un fabricant | Should |
+| QA-14 | Passages voisins : autour de chaque passage retenu, les passages adjacents du même document et de la même section (pages voisines) rejoignent le contexte, dans un budget configurable (`RETRIEVAL_NEIGHBOURS`, `RETRIEVAL_CONTEXT_CHARS`), pour qu'une procédure sur plusieurs pages soit lue entière ; ils ne décident jamais de l'ancrage | Should |
+| QA-15 | Diagnostic de récupération : `python -m src.cli explain-retrieval` liste, pour une question, chaque candidat (document, page, section, distance, rangs vecteur et plein texte, rapport à la référence citée, rang final, voisins) et la raison de son exclusion, sur la base réelle comme en test, par le même code que le chat | Should |
 | QA-12 | Recherche agentique : le modèle décide si la question demande plusieurs recherches (une par sujet, document ou étape), les lance et fusionne les résultats de façon équilibrée ; une question sans passage pertinent reste refusée sans appel au LLM | Should |
 
 #### Fournisseurs LLM (LLM)
@@ -153,6 +157,7 @@ que le produit leur soit réservé.
 | EVAL-2 | Métriques : exactitude du refus, score sémantique, taux de récupération de la bonne source, latence, calibration du score de pertinence | Must |
 | EVAL-3 | Rapports JSON + CSV horodatés | Must |
 | EVAL-4 | Jeu de référence hors finance livré avec son corpus (RH, Service-Public.fr), pour démontrer le caractère générique | Should |
+| EVAL-5 | Jeu « manuels techniques » (pages attendues, pièges croisés entre modèles) sur un corpus fourni par l'utilisateur et vérifié par empreinte, et mesure de la récupération seule (sans LLM) | Should |
 
 ### 5.2 Exigences non fonctionnelles
 
@@ -239,6 +244,14 @@ bge-m3), détail et méthode dans [evaluation.md](evaluation.md) :
 Le score de pertinence des sources ne sépare pas les réponses justes des fausses : il n'est pas
 affiché aux utilisateurs (décision issue de la mesure).
 
+### Manuels techniques, récupération seule (2026-11-22)
+
+Jeu `golden_manuals.json` (recette Nitram), mesuré sans LLM dans la VM de développement
+(`multilingual-e5-small` au lieu de `bge-m3`, plein texte en mémoire au lieu de PostgreSQL, OCR
+anglais seulement) : bon document 93 % → 100 %, bonne page 67 % → 87 %, rang réciproque 0,31 →
+0,53, passages d'un autre produit 34 % → 0 %, refus avec mention du produit pour le modèle absent.
+Détail et limites dans [evaluation.md](evaluation.md). À refaire sur l'installation du client.
+
 ### Documents numérisés (ADR-003, 2026-11-18)
 
 Corpus généré (`python -m eval.tools.make_scanned_corpus`, 5 fiches RH, 16 pages numérisées :
@@ -283,6 +296,7 @@ la qualité en français (`fra`), le score de bout en bout du jeu `golden_rh_sca
 | ADM-1 à ADM-3 | ✅ | Utilisateurs, accès par collection, état du système et flux de données |
 | EVAL-1 à EVAL-3 | ✅ | `eval/`, métriques dont calibration, rapports JSON + CSV |
 | EVAL-4 Jeu RH | ✅ | `eval/datasets/golden_rh.json` (20 questions dont 5 pièges), instantané `eval/corpora/rh` (Etalab 2.0), outil de rafraîchissement `eval/tools/fetch_service_public.py`, indexation automatique du corpus ; « bon article » étendu aux titres de section |
+| Fiabilité des documents techniques (DOC-13, QA-13 à QA-15, EVAL-5 ; recette Nitram) | 🟡 | **Implémenté et testé sur SQLite et doublures (380 tests) ; récupération mesurée dans la VM de développement avec un modèle d'embedding de substitution, pas sur l'installation du client.** Diagnostic `cli explain-retrieval` (`src/rag/retrieval.py`, même code que le nœud `retrieve`) ; couche texte inexploitable lue par OCR (`text_quality`, `OCR_MIN_TEXT_QUALITY`) ; références produit (`src/ingestion/references.py`, notation factorisée, `hub_documents.product_refs`, migration `69ab4258`, exposées par `GET /documents/{id}`), recherche limitée aux documents qui portent la référence et `RETRIEVAL_REFERENCE_BOOST` ; titre de contexte et en-têtes/pieds de page (`src/ingestion/layout.py`) ; découpage technique (`CHUNK_SIZE_TECHNICAL`), lignes de sommaire et colonnes « # » des tableaux PDF ignorées comme titres, `page_end` des passages ; passages voisins (`RETRIEVAL_NEIGHBOURS`, `RETRIEVAL_CONTEXT_CHARS`) ; garde-fou produit (`PRODUCT_MISMATCH_TEXT`, sans LLM) ; jeu `eval/datasets/golden_manuals.json` (20 questions dont 5 pièges) et `eval.tools.measure_retrieval`. Mesure avant/après dans [evaluation.md](evaluation.md) : bonne page 67 % → 87 %, passages d'un autre produit 34 % → 0 %, MAN01 retrouve les pages 42-44. **Non vérifié** : PostgreSQL (plein texte des références, requêtes `fetch` et filtre par document), `bge-m3`, OCR en français, LLM réel de bout en bout, affichage des références et des voisins dans l'interface (non modifiée). Les documents déjà indexés doivent être réindexés (`alembic upgrade head` puis `python -m src.cli reindex --collection …`) |
 | NFR-1 Sécurité | ✅ | Voir `docs/security.md` |
 | NFR-2 Confidentialité | ✅ | Mode 100 % local vérifié ; polices auto-hébergées, CSP sans ressource externe |
 | NFR-3 Installation | ✅ | `docker compose up -d` testé de bout en bout (build, migrations, nginx, indexation, streaming SSE) |
@@ -320,3 +334,4 @@ Une évolution = une branche `feature/<nom>` issue de `master`, une pull request
 | Passerelle LLM et consommation (ADR-001, lot 1) | `feature/gateway-usage` | ✅ Livrée (PR #8) |
 | Modèles et budgets depuis l'administration (ADR-002, lot 2) | `feature/models-budgets` | ✅ Livrée (PR #8) — modèles locaux à budget atteint à vérifier |
 | Interface responsive (NFR-9) | `feature/responsive-ui` | ✅ Livrée (PR #10) |
+| Fiabilité des documents techniques (DOC-13, QA-13 à QA-15, EVAL-5) | `feature/technical-docs-reliability` | 🟡 En revue — à mesurer sur l'installation du client (bge-m3, PostgreSQL, OCR `fra+eng`, LLM) |

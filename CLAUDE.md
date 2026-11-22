@@ -19,6 +19,8 @@ python -m src.workers.ocr_worker                           # queue "ocr" (scanne
 cd frontend && npm run dev                 # UI (http://localhost:5173, /api proxied to :8000)
 alembic upgrade head
 python -m src.cli create-admin|verify-audit|purge|reindex
+python -m src.cli explain-retrieval --collection NAME "question" [--json] [--excerpt 200]   # candidates, ranks, reasons
+python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --corpus eval/corpora/manuals   # retrieval only, no LLM
 python -m eval.run_eval --collection mifid [--ingest DIR]   # quality benchmark (real LLM + corpus)
 python -m eval.tools.make_scanned_corpus && python -m eval.tools.measure_ocr --lang fra+eng   # scanned set (ADR-003)
 
@@ -45,17 +47,18 @@ docker compose up -d --build               # production stack (docker-compose.ya
 | `src/auth/` | bcrypt passwords, JWT session, OIDC (PKCE + JWKS), SSO groups stored on the user at each login, rate limiter (Redis, in-memory fallback) |
 | `src/audit/service.py` | Hash-chained audit trail: `record()`, `verify_chain()`, CSV export, GDPR `redact_actor()`, retention |
 | `src/db/models.py` | ORM (portable types so tests run on SQLite). `hub_chunks` is NOT an ORM model. |
-| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002); `69ab4257` = OCR quality on `hub_documents` (`read_mode`, `ocr_pages`, `ocr_confidence`, `ocr_low_pages`, ADR-003) |
-| `src/ingestion/` | `filetypes` (sniffing, image magic numbers), `loaders` (PDF with page-by-page OCR of poor pages, JPG/PNG/TIFF images, DOCX, TXT/MD, HTML; `OcrOptions`, `OcrRequired`), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
+| `alembic/versions/` | `69ab4253` = v1 schema (users, grants, audit, conversations, `hub_chunks` with pgvector HNSW + generated `tsvector` on `fr_unaccent`); `69ab4254` = connectors (`hub_connections`, `hub_collections.conversation_id`); `69ab4255` = SSO group grants; `69ab4256` = `hub_settings` (administrator settings, ADR-002); `69ab4257` = OCR quality on `hub_documents` (`read_mode`, `ocr_pages`, `ocr_confidence`, `ocr_low_pages`, ADR-003); `69ab4258` = `hub_documents.product_refs` |
+| `src/ingestion/` | `filetypes` (sniffing, image magic numbers), `loaders` (PDF with page-by-page OCR of poor pages — few characters or an unreadable text layer, `OCR_MIN_TEXT_QUALITY` — JPG/PNG/TIFF images, DOCX, TXT/MD, HTML; `OcrOptions`, `OcrRequired`), `eu_acts` (EU act nicknames: RGPD, NIS 2, MiFID II…), `chunking` (Titre/Chapitre/Article, one chunk per definition in definitions articles/glossaries; technical documents: numbered sections "3.2.2", paragraphs, captions, `CHUNK_SIZE_TECHNICAL`; context title + product references head every passage), `references` (product references, factored ranges `US30010/15/20CNG`, matching), `layout` (running headers/footers, context title), `storage`, `url_fetch` (SSRF guard), `pipeline` (idempotent ingestion) |
 | `src/connectors/` | `confluence` (REST v1, CQL), `notion` (blocks → Markdown), `registry` (`build_connector`, test override), `crypto` (Fernet from `SECRET_KEY`), `session_sources` (pages attached to one conversation) |
 | `src/retrieval/` | `store.py` (`PgChunkStore` raw SQL hybrid search + `InMemoryChunkStore` for tests), `embeddings.py`, `rerank.py` (optional) |
+| `src/rag/retrieval.py` | One retrieval code path for the `retrieve` node and `cli explain-retrieval`: `search()` (hybrid search, product references: search restricted to the documents carrying the question's reference + `RETRIEVAL_REFERENCE_BOOST`, threshold, rerank, other-product filter and notice, top-k, every candidate with its reason), `expand()` (neighbours), `retrieve_context()`, `describe()` |
 | `src/rag/rag_pipeline.py` | LangGraph `condense → retrieve → plan → generate` (`plan` = agentic sub-query decomposition); `answer_question()`, `stream_answer()`, `create_and_run_graph()` (by collection name) |
 | `src/llm/factory.py` | `provider:model` ids; offered models = `hub_settings` key `models` if set (`model_offer()`, checked against `available_catalogue()`), else `LLM_MODELS` / gateway catalogue; Ollama / Anthropic / OpenAI / OpenAI-compatible |
 | `src/instance_settings.py` | `get` / `put` / `delete` of `hub_settings` (JSON per key), 5 s in-process cache (expires by itself: several workers), read errors fall back on the environment |
 | `src/llm/gateway.py`, `src/usage/` | LLM gateway (ADR-001): UUID + step headers, refusal mapping (402/429/503/502), consumption read from LiteLLM for `/usage/me` and `/admin/usage` — no cost stored. `BudgetManager` port + `litellm_budgets.py` (ADR-002): per-user budgets written on the gateway (`contexthub-<uuid>` budget per user), none stored |
 | `src/ocr/` | ADR-003. `base` (`OcrEngine` protocol, `OcrError`), `tesseract` (default local adapter, every failure mapped to `OcrError`), `registry` (`get_ocr_engine()`, test override, `engine_check()` for `/admin/system`), `preprocess` (grayscale, upscale, deskew, blank page; Pillow only), `reader` (`read_page`: orientation, confidence) |
 | `src/workers/` | Celery app + `ingest_document(document_id)` (default queue, backoff on transient errors only; hands documents with pages to OCR to `ocr_document`, routed to queue `ocr`) + `ocr_worker` launcher + nightly `purge_expired` |
-| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`, `golden_rh_scans.json` on a generated, unversioned `eval/corpora/rh_scans`), metrics, reporter, runner, `tools/fetch_service_public.py`, `tools/make_scanned_corpus.py`, `tools/measure_ocr.py` |
+| `eval/` | Golden datasets (`golden_rh.json` + its corpus snapshot `eval/corpora/rh`, `golden_mifid.json`, `golden_rh_scans.json` on a generated, unversioned `eval/corpora/rh_scans`, `golden_manuals.json` on proprietary manuals the user copies to the unversioned `eval/corpora/manuals` — never commit them nor their text), metrics, reporter, runner, `tools/fetch_service_public.py`, `tools/make_scanned_corpus.py`, `tools/measure_ocr.py`, `tools/measure_retrieval.py` (retrieve node only, expected pages) |
 | `frontend/src/` | React + Tailwind, French UI. `lib/api.ts` (all calls, CSRF header), `lib/auth.tsx`, `lib/usage.ts` + `components/usage/` (consumption formatting, chart, CSV), pages: Chat, KnowledgeBase, Account, Usage, admin/* |
 
 ## Invariants — do not break
@@ -65,9 +68,24 @@ docker compose up -d --build               # production stack (docker-compose.ya
   when nothing qualifies (the bug fixed in 13a1760 inverted this and refused everything).
 - Hybrid search widens the candidate pool; the distance threshold still gates grounding.
 - `NO_ANSWER_TEXT` is emitted verbatim by `retrieve` and normalised from the LLM (`is_refusal`); a
-  refusal drops its sources. The eval harness matches on the exact string.
+  refusal drops its sources. The eval harness matches on the exact string (or, for a refusal, the
+  exact string followed by the product notice below).
+- Product references (`src/ingestion/references.py`): a question that cites none is searched exactly
+  as before. One that cites some also searches the documents carrying them; passages of documents
+  that carry only other references are left out (documents without references never are). When
+  that leaves nothing, `retrieve` answers `NO_ANSWER_TEXT + " " + PRODUCT_MISMATCH_TEXT`, refused,
+  without sources and without calling the LLM. Planner sub-queries keep the question's references.
+- Neighbours (`retrieval.expand`) are only added around kept passages (same document and section,
+  next pages, `RETRIEVAL_CONTEXT_CHARS`): they never decide grounding and never count in the
+  confidence. State `anchors` = kept passages (what `plan` merges), `context` = what the LLM reads.
+- `cli explain-retrieval` and the `retrieve` node call the same `retrieval.retrieve_context()`: never
+  fork the retrieval logic for the diagnostic.
+- The context title heading passages (`layout.document_title`) never becomes a citation:
+  `Document.title` / `doc_title` stay the recognised act only. A structural heading is never a
+  running line (pages starting with "Article 93", "Article 94"…).
 - Streaming forwards only tokens from the `generate` node (`condense` and `plan` also call the LLM). When retrieve
-  short-circuits, the refusal is emitted from the retrieve end event, else the UI shows an empty bubble.
+  short-circuits (refusal or product notice), the answer is emitted from the retrieve end event, else the UI
+  shows an empty bubble.
 - `plan` runs only after `retrieve` kept something for the question itself (refusals stay LLM-free); the
   question's own ranking always comes first in the merge and a bad planner reply falls back to it.
 - Ingestion is idempotent: chunks of a document are deleted before (re)indexing.
