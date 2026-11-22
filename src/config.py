@@ -197,6 +197,9 @@ class Settings(BaseSettings):
     retrieval_context_chars: int = 12000
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    # Local models (re-ranker) are read from the HuggingFace cache only, with no call to the
+    # Hub, not even an update check. Download them once with this off, then turn it on.
+    hf_hub_offline: bool = False
     history_turns: int = 4
     # Agentic retrieval: the LLM splits multi-part questions into up to N sub-queries,
     # searched on top of the question (one extra LLM call per answered question;
