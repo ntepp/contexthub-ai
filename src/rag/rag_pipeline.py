@@ -150,12 +150,23 @@ def _normalise(text: str) -> str:
     return " ".join(text.replace("’", "'").split()).strip().strip('"«» ').lower()
 
 
+def _product_mismatch_pattern() -> re.Pattern[str]:
+    """The refusal written by the product guard: ``NO_ANSWER_TEXT`` then
+    ``PRODUCT_MISMATCH_TEXT``, whatever the length of the references it names."""
+    template = _normalise(get_settings().product_mismatch_text)
+    parts = re.split(r"\\{(?:found|asked)\\}", re.escape(template))
+    return re.compile(re.escape(_normalise(no_answer_text())) + " " + ".+?".join(parts) + "$")
+
+
 def is_refusal(answer: str) -> bool:
     target = _normalise(no_answer_text())
     got = _normalise(answer)
     if not got:
         return True
-    return got == target or (target in got and len(got) <= len(target) + 80)
+    if got == target or (target in got and len(got) <= len(target) + 80):
+        return True
+    # Only the guard's own form, not any long text that merely starts with a refusal.
+    return bool(_product_mismatch_pattern().fullmatch(got))
 
 
 def cited_indices(answer: str) -> set[int]:

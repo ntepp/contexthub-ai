@@ -133,3 +133,14 @@ def test_the_benchmark_counts_the_product_notice_as_a_refusal():
     assert refusal_exact_match(notice, no_answer, refused=True)
     assert not refusal_exact_match(notice, no_answer)  # an answer that merely starts like it
     assert refusal_exact_match(no_answer, no_answer)
+
+
+def test_a_long_product_mismatch_is_still_a_refusal():
+    settings = get_settings()
+    found = ", ".join(["US10001TSARM", "US10001.5TSARM", "US10002TSARM", "US10003TSARM", "BP10001.5TSA-RM"]) + "…"
+    detail = settings.product_mismatch_text.format(found=found, asked="US30050CNG")
+    answer = f"{settings.no_answer_text} {detail}"
+    assert len(answer) > len(settings.no_answer_text) + 80
+    assert is_refusal(answer)
+    # A long answer that only opens with the refusal sentence still counts as an answer.
+    assert not is_refusal(f"{settings.no_answer_text} " + "Appuyez sur la touche HOME puis sur ENTER. " * 3)
