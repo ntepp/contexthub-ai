@@ -90,6 +90,7 @@ def serialize_document(doc: Document) -> dict:
         "ocr_pages": doc.ocr_pages or 0,
         "ocr_confidence": doc.ocr_confidence,
         "ocr_low_pages": doc.ocr_low_pages or [],
+        "product_refs": doc.product_refs or [],
         "ocr_eligible": doc.mime_type in OCR_TYPES and doc.storage_path is not None,
         "progress": {"current": doc.progress_current, "total": doc.progress_total},
         "has_file": storage.resolve_stored(doc.storage_path) is not None,

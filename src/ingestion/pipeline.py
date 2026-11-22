@@ -18,13 +18,18 @@ from src.ingestion import storage
 from src.ingestion.chunking import chunk_pages
 from src.ingestion.eu_acts import detect_act
 from src.ingestion.filetypes import IngestionError, sniff
+from src.ingestion.layout import document_title, running_lines, strip_running_lines
 from src.ingestion.loaders import OcrOptions, load_file
+from src.ingestion.references import document_references
 from src.ingestion.url_fetch import fetch_url
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import ChunkRecord, get_store
 from src.utils.logging_config import get_logger
 
 log = get_logger()
+
+# Unpaginated text (Markdown, Word, HTML) is one "page": its first characters stand for it.
+_FIRST_PAGE_CHARS = 3000
 
 
 @dataclass
@@ -102,12 +107,28 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
     act = detect_act(loaded.pages[0].text) if loaded.pages else None
     if act is not None:
         log.info("[ingestion] texte reconnu : %s", act.label)
+    # Running headers and footers (paginated documents) say what the document is about and
+    # are noise inside passages: they feed its title and references, then are removed.
+    running = running_lines(loaded.pages)
+    # Heads every passage (embedding, full-text index, LLM context); citations keep the
+    # file name and the recognised act (Document.title), never this detected title.
+    context_title = act.label if act else document_title(loaded.pages, running, loaded.title)
+    # Product references: the title, the first page and the running lines say which product
+    # the document is about; every page counts when a question's reference is matched.
+    first_page = loaded.pages[0].text[:_FIRST_PAGE_CHARS] if loaded.pages else ""
+    product_refs, heading_refs = document_references(
+        [context_title or "", first_page, *running], [p.text for p in loaded.pages]
+    )
     chunks = chunk_pages(
-        loaded.pages,
+        strip_running_lines(loaded.pages, running),
         settings.chunk_size,
         settings.chunk_overlap,
-        act.label if act else None,
+        context_title,
         split_definitions=settings.chunk_definitions,
+        references=heading_refs,
+        technical_chunk_size=settings.chunk_size_technical or None,
+        # "# …" lines are headings in Markdown, Word and HTML text, not in PDF pages or scans.
+        markdown_headings=not loaded.page_count,
     )
     if not chunks:
         if loaded.ocr_attempted:
@@ -129,6 +150,7 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
         ocr_pages=loaded.ocr_pages,
         ocr_confidence=loaded.ocr_confidence,
         ocr_low_pages=loaded.low_pages or None,
+        product_refs=product_refs or None,
     )
     log.info("[ingestion] %s : %d chunks à indexer par lots de %d", doc.filename, total, settings.embed_batch_size)
 
@@ -148,6 +170,7 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
                         "filename": doc.filename,
                         "doc_title": act.label if act else None,
                         "page": chunk.page,
+                        **({"page_end": chunk.page_end} if chunk.page_end != chunk.page else {}),
                         "section": chunk.section,
                         "section_path": chunk.section_path,
                         # Connector pages: the citation opens the page in its own system.

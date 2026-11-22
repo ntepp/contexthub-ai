@@ -24,6 +24,9 @@ _INSECURE_SECRET = "dev-insecure-secret-change-me"
 SUPPORTED_GATEWAY_KINDS = ("litellm",)
 
 DEFAULT_NO_ANSWER = "L'information n'est pas disponible dans la base de connaissances actuelle."
+# Follows NO_ANSWER_TEXT when the question cites a product reference and every source found
+# is about other products: {found} = their references, {asked} = the question's.
+DEFAULT_PRODUCT_MISMATCH = "Les sources trouvées concernent {found}, pas {asked}."
 
 
 class Settings(BaseSettings):
@@ -98,11 +101,19 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     # One chunk per definition in definition articles and glossaries (see chunking.py).
     chunk_definitions: bool = True
+    # Technical documents (numbered sections "3.2.2 Titre", tables: manuals, procedures) are cut
+    # into smaller passages, at paragraph breaks (see chunking.py). 0 = cut them like any text.
+    chunk_size_technical: int = 800
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
     # A PDF page whose text layer has fewer letters and digits than this is read by OCR
     # (the native text is kept when OCR does not find more).
     ocr_min_page_chars: int = 50
+    # A PDF page whose extracted text is mostly unreadable — share of its letters and glyphs
+    # that form plausible words below this (0-1): private-use glyphs of fonts without a
+    # Unicode table, stray labels of a drawing whose text is an image — is read by OCR like a
+    # page without text, whatever its length (the native text is kept when OCR reads less).
+    ocr_min_text_quality: float = 0.5
     # Pages whose mean OCR word confidence (0-100) is below this are reported as badly read.
     ocr_min_confidence: float = 60.0
     ocr_dpi: int = 300  # rendering resolution of PDF pages, target resolution of scans
@@ -176,6 +187,14 @@ class Settings(BaseSettings):
     retrieval_hybrid: bool = True
     fts_language: str = "fr_unaccent"
     rrf_k: int = 60
+    # Added to the fused (RRF) score of the passages of documents carrying a product reference
+    # cited by the question (US30010CNG…); 1/(RRF_K+1) is what a first rank in one list brings.
+    retrieval_reference_boost: float = 0.02
+    # Adjacent passages (same document, pages next to each other) joined around each kept
+    # passage, on each side, so that a procedure spread over several passages is read whole
+    # (0 = none); within a budget for the whole context sent to the LLM, in characters.
+    retrieval_neighbours: int = 1
+    retrieval_context_chars: int = 12000
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     history_turns: int = 4
@@ -185,6 +204,7 @@ class Settings(BaseSettings):
     agentic_retrieval: bool = True
     agentic_max_queries: int = 3
     no_answer_text: str = DEFAULT_NO_ANSWER
+    product_mismatch_text: str = DEFAULT_PRODUCT_MISMATCH
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH
     # d'ACME ; les documents sont la convention collective et les accords d'entreprise."
     assistant_context: str = ""

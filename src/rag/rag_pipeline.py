@@ -31,12 +31,13 @@ from langgraph.graph import START, StateGraph
 from typing_extensions import TypedDict
 
 from src.config import get_settings
+from src.ingestion.references import question_references
 from src.llm.factory import ModelSpec, parse_model_id, resolve_model
 from src.llm.llm_chain import initialize_model_llm
 from src.observability.metrics import RAG_LATENCY, RAG_QUERIES, RAG_RETAINED_CHUNKS
+from src.rag import retrieval
 from src.retrieval.embeddings import get_embeddings
-from src.retrieval.rerank import rerank
-from src.retrieval.store import RetrievedChunk, get_store
+from src.retrieval.store import RetrievedChunk
 from src.utils.logging_config import get_logger
 
 log = get_logger()
@@ -52,7 +53,10 @@ Rules, in order of precedence:
 2. Use only the sources, never prior knowledge. Do not speculate or extrapolate.
 3. After each statement, cite the supporting source numbers in square brackets, e.g. [1] or [2][3].
 4. Always answer in the same language as the question.
-5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them."""
+5. Be concise, factual and precise. Quote section, article or paragraph references when the sources give them.
+6. A source may start with the document it comes from and the product references it is about, in
+   square brackets. When the question names a product, never apply to it a source about another
+   product; if no source is about the product named, say so."""
 
 
 def system_prompt() -> str:
@@ -108,6 +112,9 @@ class State(TypedDict, total=False):
     user_id: str
     standalone_question: str
     search_queries: list[str]
+    # Kept passages, best first (the planner merges its sub-queries' with these), and the
+    # context the LLM reads: the same passages with their neighbours.
+    anchors: list[RetrievedChunk]
     context: list[RetrievedChunk]
     answer: str | None
     sources: list[dict]
@@ -143,12 +150,23 @@ def _normalise(text: str) -> str:
     return " ".join(text.replace("’", "'").split()).strip().strip('"«» ').lower()
 
 
+def _product_mismatch_pattern() -> re.Pattern[str]:
+    """The refusal written by the product guard: ``NO_ANSWER_TEXT`` then
+    ``PRODUCT_MISMATCH_TEXT``, whatever the length of the references it names."""
+    template = _normalise(get_settings().product_mismatch_text)
+    parts = re.split(r"\\{(?:found|asked)\\}", re.escape(template))
+    return re.compile(re.escape(_normalise(no_answer_text())) + " " + ".+?".join(parts) + "$")
+
+
 def is_refusal(answer: str) -> bool:
     target = _normalise(no_answer_text())
     got = _normalise(answer)
     if not got:
         return True
-    return got == target or (target in got and len(got) <= len(target) + 80)
+    if got == target or (target in got and len(got) <= len(target) + 80):
+        return True
+    # Only the guard's own form, not any long text that merely starts with a refusal.
+    return bool(_product_mismatch_pattern().fullmatch(got))
 
 
 def cited_indices(answer: str) -> set[int]:
@@ -183,6 +201,8 @@ def build_sources(chunks: Sequence[RetrievedChunk]) -> list[dict]:
                 "section_path": meta.get("section_path") or [],
                 "snippet": body[:600],
                 "distance": round(chunk.distance, 4),
+                # Joined for being next to a kept passage (same document), not found by the search.
+                "neighbour": chunk.neighbour_of is not None,
                 "url": meta.get("source_url"),
                 "source_kind": meta.get("source_kind"),
                 "cited": False,
@@ -263,21 +283,22 @@ def _spec(state: State) -> ModelSpec:
     return parse_model_id(state["model_id"])
 
 
-async def _search(query: str, collection_ids: list[uuid.UUID]) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
+async def _search(
+    query: str, collection_ids: list[uuid.UUID], references: list[str] | None = None
+) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
     """(all candidates, grounded top-k) for one query."""
-    settings = get_settings()
-    vector = await asyncio.to_thread(get_embeddings().embed_query, query)
-    results = await asyncio.to_thread(
-        get_store().search,
-        query,
-        vector,
-        collection_ids,
-        settings.retrieval_candidates,
-        settings.retrieval_hybrid,
-    )
-    kept = [r for r in results if r.distance <= settings.retrieval_max_distance]
-    kept = (await asyncio.to_thread(rerank, query, kept))[: settings.retrieval_top_k]
-    return results, kept
+    found = await retrieval.search(query, collection_ids, references)
+    return [c.chunk for c in found.candidates], found.kept
+
+
+def _references(state: State) -> list[str]:
+    """Product references cited by the question, as asked and as reformulated."""
+    found: list[str] = []
+    for text in (state.get("standalone_question") or "", state["question"]):
+        for ref in question_references(text):
+            if ref not in found:
+                found.append(ref)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +328,8 @@ async def retrieve(state: State) -> dict:
     query = state.get("standalone_question") or state["question"]
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
 
-    results, kept = await _search(query, collection_ids)
+    found = await retrieval.retrieve_context(query, collection_ids, _references(state))
+    results, kept = [c.chunk for c in found.candidates], found.kept
 
     log.info(
         "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
@@ -321,20 +343,27 @@ async def retrieve(state: State) -> dict:
 
     if not kept:
         RAG_RETAINED_CHUNKS.observe(0)
-        log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
+        if found.notice:
+            log.warning("[retrieve] sources sur d'autres produits que %s — court-circuit", ", ".join(found.asked_refs))
+        else:
+            log.warning("[retrieve] aucun chunk sous le seuil — court-circuit, le LLM ne sera pas appele")
         return {
             "search_queries": [query],
+            "anchors": [],
             "context": [],
-            "answer": no_answer_text(),
+            "answer": found.notice or no_answer_text(),
             "sources": [],
             "confidence_metric": 0.0,
             "refused": True,
         }
+    if len(found.context) > len(kept):
+        log.info("[retrieve] %d passage(s) voisin(s) joint(s) au contexte", len(found.context) - len(kept))
     return {
         "search_queries": [query],
-        "context": kept,
+        "anchors": kept,
+        "context": found.context,
         "answer": None,
-        "sources": build_sources(kept),
+        "sources": build_sources(found.context),
         "confidence_metric": confidence_from(kept),
         "refused": False,
     }
@@ -359,9 +388,13 @@ async def plan(state: State) -> dict:
         return {}
 
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
-    extra = await asyncio.gather(*(_search(q, collection_ids) for q in queries[1:]))
-    rankings = [state["context"]] + [kept for _, kept in extra]
+    # Sub-queries keep the question's product references, even when the planner drops them.
+    references = _references(state)
+    extra = await asyncio.gather(*(_search(q, collection_ids, references) for q in queries[1:]))
+    rankings = [state.get("anchors") or state["context"]] + [kept for _, kept in extra]
     merged = interleave(rankings, settings.retrieval_top_k)
+    vector = await asyncio.to_thread(get_embeddings().embed_query, question)
+    context = await retrieval.expand(merged, vector, collection_ids)
     RAG_RETAINED_CHUNKS.observe(len(merged))
     log.info(
         "[plan] %d recherches : %s — retenus par recherche : %s",
@@ -371,8 +404,9 @@ async def plan(state: State) -> dict:
     )
     return {
         "search_queries": queries,
-        "context": merged,
-        "sources": build_sources(merged),
+        "anchors": merged,
+        "context": context,
+        "sources": build_sources(context),
         "confidence_metric": confidence_from(merged),
     }
 

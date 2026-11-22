@@ -52,6 +52,14 @@ class RetrievedChunk:
     metadata: dict
     distance: float
     score: float = 0.0
+    # Diagnostics (explain-retrieval): position of the chunk in each list fused by RRF
+    # (None: not in that list), full-text rank value, position in its document.
+    vector_rank: int | None = None
+    lexical_rank: int | None = None
+    lexical_score: float | None = None
+    chunk_index: int | None = None
+    # Set on a passage joined to the context for being next to a kept one (that one's id).
+    neighbour_of: uuid.UUID | None = None
 
 
 class ChunkStore(Protocol):
@@ -70,7 +78,19 @@ class ChunkStore(Protocol):
         collection_ids: Sequence[uuid.UUID],
         candidates: int,
         hybrid: bool,
-    ) -> list[RetrievedChunk]: ...
+        document_ids: Sequence[uuid.UUID] | None = None,
+    ) -> list[RetrievedChunk]:
+        """``document_ids``: search only these documents (still within ``collection_ids``)."""
+        ...
+
+    def fetch(
+        self,
+        positions: Sequence[tuple[uuid.UUID, int]],
+        query_embedding: list[float],
+        collection_ids: Sequence[uuid.UUID],
+    ) -> list[RetrievedChunk]:
+        """Chunks at these (document, chunk index) positions, with their distance to the query."""
+        ...
 
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -157,8 +177,9 @@ class PgChunkStore:
         collection_ids: Sequence[uuid.UUID],
         candidates: int,
         hybrid: bool,
+        document_ids: Sequence[uuid.UUID] | None = None,
     ) -> list[RetrievedChunk]:
-        if not collection_ids:
+        if not collection_ids or document_ids is not None and not document_ids:
             return []
         settings = get_settings()
         terms = lexical_terms(query_text) if hybrid else []
@@ -172,31 +193,36 @@ class PgChunkStore:
             # "Définitions" (stem "definit").
             "tsq": " | ".join(f"{t}:*" if len(t) >= 5 and not t.isdigit() else t for t in terms),
         }
+        scope = "collection_id = ANY(CAST(:cids AS uuid[]))"
+        if document_ids is not None:
+            scope += " AND document_id = ANY(CAST(:dids AS uuid[]))"
+            params["dids"] = [str(d) for d in document_ids]
         lexical_cte = (
-            """
+            f"""
             lex AS (
-                SELECT id, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) AS r
+                SELECT id, ts_rank_cd(tsv, q) AS s, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) AS r
                 FROM hub_chunks, to_tsquery(CAST(:lang AS regconfig), :tsq) q
-                WHERE collection_id = ANY(CAST(:cids AS uuid[])) AND tsv @@ q
+                WHERE {scope} AND tsv @@ q
                 ORDER BY ts_rank_cd(tsv, q) DESC
                 LIMIT :n
             )
             """
             if terms
-            else "lex AS (SELECT NULL::uuid AS id, NULL::bigint AS r WHERE false)"
+            else "lex AS (SELECT NULL::uuid AS id, NULL::real AS s, NULL::bigint AS r WHERE false)"
         )
         sql = f"""
             WITH vec AS (
                 SELECT id, row_number() OVER (ORDER BY embedding <=> CAST(:qvec AS vector)) AS r
                 FROM (
                     SELECT id, embedding FROM hub_chunks
-                    WHERE collection_id = ANY(CAST(:cids AS uuid[]))
+                    WHERE {scope}
                     ORDER BY embedding <=> CAST(:qvec AS vector)
                     LIMIT :n
                 ) v
             ),
             {lexical_cte}
-            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata,
+            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata, c.chunk_index,
+                   vec.r AS vector_rank, lex.r AS lexical_rank, lex.s AS lexical_score,
                    (c.embedding <=> CAST(:qvec AS vector)) AS distance,
                    COALESCE(1.0 / (:rrf_k + vec.r), 0) + COALESCE(1.0 / (:rrf_k + lex.r), 0) AS score
             FROM hub_chunks c
@@ -219,9 +245,52 @@ class PgChunkStore:
                 metadata=row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"]),
                 distance=float(row["distance"]),
                 score=float(row["score"]),
+                vector_rank=row["vector_rank"],
+                lexical_rank=row["lexical_rank"],
+                lexical_score=None if row["lexical_score"] is None else float(row["lexical_score"]),
+                chunk_index=row["chunk_index"],
             )
             for row in rows
         ]
+
+    def fetch(self, positions, query_embedding, collection_ids) -> list[RetrievedChunk]:
+        if not positions or not collection_ids:
+            return []
+        with get_engine().connect() as conn:
+            rows = _fetch_rows(conn, positions, query_embedding, collection_ids)
+        return [
+            RetrievedChunk(
+                id=row["id"] if isinstance(row["id"], uuid.UUID) else uuid.UUID(str(row["id"])),
+                document_id=uuid.UUID(str(row["document_id"])),
+                collection_id=uuid.UUID(str(row["collection_id"])),
+                content=row["content"],
+                metadata=row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"]),
+                distance=float(row["distance"]),
+                chunk_index=row["chunk_index"],
+            )
+            for row in rows
+        ]
+
+
+def _fetch_rows(conn, positions, query_embedding, collection_ids):
+    return conn.execute(
+        text(
+            """
+            SELECT c.id, c.document_id, c.collection_id, c.content, c.metadata, c.chunk_index,
+                   (c.embedding <=> CAST(:qvec AS vector)) AS distance
+            FROM hub_chunks c
+            JOIN unnest(CAST(:dids AS uuid[]), CAST(:idx AS int[])) AS p(document_id, chunk_index)
+              ON c.document_id = p.document_id AND c.chunk_index = p.chunk_index
+            WHERE c.collection_id = ANY(CAST(:cids AS uuid[]))
+            """
+        ),
+        {
+            "qvec": _vector_literal(query_embedding),
+            "dids": [str(d) for d, _ in positions],
+            "idx": [int(i) for _, i in positions],
+            "cids": [str(c) for c in collection_ids],
+        },
+    ).mappings().all()
 
 
 class InMemoryChunkStore:
@@ -256,12 +325,15 @@ class InMemoryChunkStore:
         nb = math.sqrt(sum(y * y for y in b)) or 1.0
         return 1.0 - dot / (na * nb)
 
-    def search(self, query_text, query_embedding, collection_ids, candidates, hybrid):
+    def search(self, query_text, query_embedding, collection_ids, candidates, hybrid, document_ids=None):
         settings = get_settings()
         pool = [c for c in self.chunks.values() if c.collection_id in set(collection_ids)]
+        if document_ids is not None:
+            pool = [c for c in pool if c.document_id in set(document_ids)]
         by_distance = sorted(pool, key=lambda c: self._cosine_distance(query_embedding, c.embedding))[:candidates]
         ranks_vec = {c.id: i + 1 for i, c in enumerate(by_distance)}
         ranks_lex: dict[uuid.UUID, int] = {}
+        hits_lex: dict[uuid.UUID, int] = {}
         terms = lexical_terms(query_text) if hybrid else []
         if terms:
             scored = []
@@ -272,6 +344,7 @@ class InMemoryChunkStore:
                     scored.append((hits, c))
             scored.sort(key=lambda x: -x[0])
             ranks_lex = {c.id: i + 1 for i, (_, c) in enumerate(scored[:candidates])}
+            hits_lex = {c.id: hits for hits, c in scored[:candidates]}
         ids = set(ranks_vec) | set(ranks_lex)
         results = []
         for cid in ids:
@@ -290,10 +363,30 @@ class InMemoryChunkStore:
                     metadata=dict(c.metadata),
                     distance=self._cosine_distance(query_embedding, c.embedding),
                     score=score,
+                    vector_rank=ranks_vec.get(cid),
+                    lexical_rank=ranks_lex.get(cid),
+                    lexical_score=float(hits_lex[cid]) if cid in hits_lex else None,
+                    chunk_index=c.chunk_index,
                 )
             )
         results.sort(key=lambda r: (-r.score, r.distance))
         return results
+
+    def fetch(self, positions, query_embedding, collection_ids) -> list[RetrievedChunk]:
+        wanted, allowed = set(positions), set(collection_ids)
+        return [
+            RetrievedChunk(
+                id=c.id,
+                document_id=c.document_id,
+                collection_id=c.collection_id,
+                content=c.content,
+                metadata=dict(c.metadata),
+                distance=self._cosine_distance(query_embedding, c.embedding),
+                chunk_index=c.chunk_index,
+            )
+            for c in self.chunks.values()
+            if (c.document_id, c.chunk_index) in wanted and c.collection_id in allowed
+        ]
 
 
 _store_override: ChunkStore | None = None

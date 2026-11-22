@@ -1,7 +1,8 @@
 """Scoring of one pipeline response against a golden question, and aggregation.
 
 Metrics
-- refusal_match: exact refusal on unanswerable traps (the grounding guarantee)
+- refusal_match: exact refusal on unanswerable traps (the grounding guarantee), product
+  notice included (NO_ANSWER_TEXT followed by PRODUCT_MISMATCH_TEXT, ``refused`` true)
 - over_refusal: refusal on an answerable question (lost recall)
 - semantic_score: cosine similarity of bge-m3 embeddings (answer vs ground truth)
 - retrieval_hit: every expected document appears among the returned sources
@@ -24,8 +25,11 @@ from statistics import mean
 from eval.harness.loader import GoldenQuestion
 
 
-def refusal_exact_match(predicted: str, no_answer: str) -> bool:
-    return predicted.strip() == no_answer.strip()
+def refusal_exact_match(predicted: str, no_answer: str, refused: bool = False) -> bool:
+    """The exact refusal sentence — alone, or (``refused``) followed by the product notice
+    retrieval adds when every source is about another product (PRODUCT_MISMATCH_TEXT)."""
+    predicted, no_answer = predicted.strip(), no_answer.strip()
+    return predicted == no_answer or (refused and predicted.startswith(no_answer + " "))
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -115,7 +119,7 @@ class QuestionResult:
 def score_question(q: GoldenQuestion, response: dict, *, no_answer: str, embeddings, threshold: float) -> QuestionResult:
     predicted = response.get("answer", "") or ""
     sources = response.get("sources", []) or []
-    refused = refusal_exact_match(predicted, no_answer)
+    refused = refusal_exact_match(predicted, no_answer, bool(response.get("refused")))
     if q.answerable:
         if refused:
             semantic = 0.0

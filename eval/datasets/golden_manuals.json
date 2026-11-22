@@ -1,0 +1,327 @@
+{
+  "metadata": {
+    "corpus": "Manuels d'utilisation d'onduleurs Nitram (CyberPower) : US30010/15/20/30/40CNG (80 pages, texte en images sans couche texte exploitable, lu par OCR), série US10000TSARM (38 pages, texte natif) et sa fiche produit (2 pages). Documents propriétaires du fabricant : non versionnés.",
+    "collection": "manuels",
+    "corpus_dir": "eval/corpora/manuals",
+    "corpus_files": {
+      "nitram-US30010-40CNG-manuel.pdf": "3a9e4aac19380a9751c78e5dfcd9afb327a05a493e6d94f13a536aaecb766262",
+      "nitram-US10000TSARM-manuel.pdf": "284839dc4e36b922c31ca3da8f5c2100b9287d1a516977172653573b45a4dd82",
+      "nitram-US10000TSARM-fiche.pdf": "cf20832f69fb0b69b24f8de127cab203b81e6c24921aa6e42f05c2e609dd2eff"
+    },
+    "expected_documents": [
+      "nitram-US30010-40CNG-manuel.pdf",
+      "nitram-US10000TSARM-manuel.pdf",
+      "nitram-US10000TSARM-fiche.pdf"
+    ],
+    "version": "1.0",
+    "created": "2026-11-22",
+    "notes": "Jeu « manuels techniques » (recette Nitram, question MAN01). Le corpus n'est pas versionné : copiez les trois PDF dans eval/corpora/manuals/ sous les noms de corpus_files (empreintes SHA-256 vérifiées par eval.tools.measure_retrieval), puis python -m eval.tools.measure_retrieval --dataset eval/datasets/golden_manuals.json --corpus eval/corpora/manuals (récupération seule) ou python -m eval.run_eval --dataset eval/datasets/golden_manuals.json (bout en bout, LLM réel). expected_pages : pages du PDF (1 = première page du fichier), pas les numéros imprimés (MAN01 : pages imprimées 32-34). Réponses vérifiées dans le texte lu (OCR Tesseract pour le CNG). MAN16 à MAN18 sont des pièges croisés : MAN16 cite un modèle absent (US30050CNG, hors de la notation US30010/15/20/30/40CNG) et doit être refusé en nommant le modèle demandé (expected_notice_refs) ; MAN17 et MAN18 demandent pour un TSARM une information que seul le manuel CNG donne. MAN19 et MAN20 n'ont de réponse dans aucun document. product_documents : documents qui concernent le produit cité par la question (mesure de la part de passages d'un autre produit)."
+  },
+  "questions": [
+    {
+      "id": "MAN01",
+      "category": "procedure_multipage",
+      "question": "j'ai une alarme sur mon onduleur Nitram US30010CNG qui bipe. comment eteindre le bip?",
+      "ground_truth": "Sur l'écran LCD de l'armoire, naviguez avec les touches ACCUEIL, page précédente, page suivante et ENTRÉE (tableau 3.3), puis sélectionnez l'icône « Bouton Mute (Silence) » (tableau 3.4) : elle désactive le buzzer déclenché par les alarmes générales.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Ecran LCD",
+      "answerable": true,
+      "expected_pages": [
+        42,
+        43,
+        44
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN02",
+      "category": "factual_simple",
+      "question": "Que signifient deux alarmes brèves suivies d'une longue sur un US30020CNG ?",
+      "ground_truth": "Deux alarmes brèves suivies d'une longue signalent une alarme générale du système (par exemple une panne AC) ; une alarme continue signale une panne grave (fusible ou matériel).",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Voyants LED",
+      "answerable": true,
+      "expected_pages": [
+        41
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN03",
+      "category": "factual_simple",
+      "question": "Au bout de combien de temps l'écran LCD du US30015CNG se met-il en veille ?",
+      "ground_truth": "L'écran LCD se met en veille au bout de 2 minutes ; aucun avertissement ni panne n'est affiché pendant ce temps et un appui sur n'importe quel bouton réactive l'écran.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Ecran LCD",
+      "answerable": true,
+      "expected_pages": [
+        44
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN04",
+      "category": "factual_simple",
+      "question": "À quoi sert le bouton EPO du US30040CNG et que se passe-t-il quand on l'actionne ?",
+      "ground_truth": "Le bouton EPO arrête l'onduleur en cas d'urgence (incendie, inondation…) : il met hors tension le redresseur et le convertisseur DC/AC, coupe immédiatement l'alimentation de la charge (convertisseur et bypass) et les batteries cessent de se charger ou de se décharger. Si le secteur est présent, le circuit de contrôle reste actif ; pour isoler complètement l'onduleur, il faut ouvrir l'alimentation secteur externe.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "EPO",
+      "answerable": true,
+      "expected_pages": [
+        57
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN05",
+      "category": "factual_simple",
+      "question": "Quelle température de fonctionnement est recommandée pour les batteries du US30010CNG ?",
+      "ground_truth": "Entre 20 °C et 25 °C : au-dessus de 25 °C la durée de vie des batteries est réduite, en dessous de 20 °C leur capacité est réduite.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Environnement d'installation",
+      "answerable": true,
+      "expected_pages": [
+        19
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN06",
+      "category": "procedure_multipage",
+      "question": "Comment lancer un test des batteries sur un US30030CNG et combien de temps dure-t-il ?",
+      "ground_truth": "Dans le menu de fonctions, l'icône BattTest décharge les batteries pendant environ 30 secondes puis le système repasse en mode Normal ; l'icône MaintTest décharge les batteries jusqu'à l'alarme « Battery low voltage » et peut être interrompue par « Stop Test ».",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Maintenance des batteries",
+      "answerable": true,
+      "expected_pages": [
+        56
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN07",
+      "category": "factual_simple",
+      "question": "Combien de batteries faut-il installer dans un onduleur US30020CNG ?",
+      "ground_truth": "Pour un onduleur de 20-30 kVA (US30020CNG), 40 batteries de 12 Ah peuvent être installées.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Installation des batteries internes",
+      "answerable": true,
+      "expected_pages": [
+        64
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN08",
+      "category": "procedure_multipage",
+      "question": "Au démarrage d'un US30010CNG, au bout de combien de temps le voyant du redresseur passe-t-il au vert fixe ?",
+      "ground_truth": "Au bout de 30 secondes, le voyant du redresseur passe au vert continu, puis le commutateur de bypass statique se ferme et le convertisseur DC/AC démarre.",
+      "source_document": "nitram-US30010-40CNG-manuel.pdf",
+      "reference_article": "Démarrage de l'onduleur",
+      "answerable": true,
+      "expected_pages": [
+        53
+      ],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    },
+    {
+      "id": "MAN09",
+      "category": "procedure_multipage",
+      "question": "Comment arrêter le bip d'alarme sur un onduleur US10002TSARM ?",
+      "ground_truth": "Appuyez sur n'importe quel bouton pour mettre l'alarme en silence (si le statut de l'alarme change, elle retentit à nouveau). Le réglage 07 « Audible Alarms » permet aussi de désactiver le buzzer ou de ne le garder que pour la batterie faible.",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        16,
+        22
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN10",
+      "category": "factual_simple",
+      "question": "Combien de temps faut-il charger les batteries d'un US10001TSARM avant la première utilisation ?",
+      "ground_truth": "Il est vivement recommandé de charger les batteries pendant cinq heures avant d'utiliser l'onduleur, en le raccordant simplement à une prise secteur.",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        10
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN11",
+      "category": "factual_simple",
+      "question": "Comment mettre en marche un onduleur US10003TSARM ?",
+      "ground_truth": "Appuyez sur le bouton ON/OFF pendant au moins 3 secondes pour mettre l'onduleur en marche (ou l'arrêter).",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        15,
+        16
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN12",
+      "category": "factual_simple",
+      "question": "Que signifie le code d'événement 07 sur un US10001.5TSARM ?",
+      "ground_truth": "Le code 07 « Service Battery » (Entretien batterie) indique que la date de remplacement des batteries a atteint la période de maintenance.",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        27
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN13",
+      "category": "reasoning_conditional",
+      "question": "Pourquoi mon US10002TSARM émet-il un bip toutes les secondes ?",
+      "ground_truth": "Une alarme sonore continue d'un bip par seconde signale une surcharge détectée ; il faut déconnecter certains équipements des sorties de l'onduleur pour le réinitialiser.",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        10
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN14",
+      "category": "factual_simple",
+      "question": "Quel est le poids net d'un US10003TSARM ?",
+      "ground_truth": "Le poids net du US10003TSARM est de 26,7 kg.",
+      "source_document": "nitram-US10000TSARM-manuel.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        36
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN15",
+      "category": "factual_simple",
+      "question": "Quelle est la puissance en watts d'un US10002TSARM ?",
+      "ground_truth": "Le US10002TSARM a une capacité de 2000 VA, soit 1800 W.",
+      "source_document": "nitram-US10000TSARM-fiche.pdf",
+      "reference_article": null,
+      "answerable": true,
+      "expected_pages": [
+        2
+      ],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN16",
+      "category": "trap_other_model",
+      "question": "Comment couper le bip sur l'onduleur Nitram US30050CNG ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false,
+      "expected_pages": [],
+      "product_documents": [],
+      "expected_notice_refs": [
+        "US30050CNG"
+      ]
+    },
+    {
+      "id": "MAN17",
+      "category": "trap_other_model",
+      "question": "Sur un US10002TSARM, que signifient deux alarmes brèves suivies d'une longue ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false,
+      "expected_pages": [],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN18",
+      "category": "trap_other_model",
+      "question": "Comment configurer un système parallèle de plusieurs onduleurs US10001TSARM ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false,
+      "expected_pages": [],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN19",
+      "category": "unanswerable_trap",
+      "question": "Quel est le prix public d'un US10003TSARM ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false,
+      "expected_pages": [],
+      "product_documents": [
+        "nitram-US10000TSARM-manuel.pdf",
+        "nitram-US10000TSARM-fiche.pdf"
+      ]
+    },
+    {
+      "id": "MAN20",
+      "category": "unanswerable_trap",
+      "question": "Quelle est la durée de la garantie d'un US30010CNG ?",
+      "ground_truth": "L'information n'est pas disponible dans la base de connaissances actuelle.",
+      "source_document": null,
+      "reference_article": null,
+      "answerable": false,
+      "expected_pages": [],
+      "product_documents": [
+        "nitram-US30010-40CNG-manuel.pdf"
+      ]
+    }
+  ]
+}
