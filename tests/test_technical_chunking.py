@@ -80,3 +80,22 @@ def test_legal_texts_are_cut_exactly_as_before():
     before = chunk_pages(pages, chunk_size=300, chunk_overlap=30)
     after = chunk_pages(pages, chunk_size=300, chunk_overlap=30, technical_chunk_size=200)
     assert [(c.content, c.page, c.section_path) for c in after] == [(c.content, c.page, c.section_path) for c in before]
+
+
+def test_table_of_contents_lines_and_pdf_table_columns_are_not_headings():
+    from src.ingestion.chunking import detect_heading
+
+    assert detect_heading("ANNEXE - TABLEAU DE COMPARAISON DES MOTS A L ECRAN .................. 34") is None
+    assert detect_heading("Article 4 - Definitions . . . . . 12") is None
+    assert detect_heading("ANNEXE I - Liste des services") == (1, "Annexe I — Liste des services", False)
+    assert detect_heading("# BOUTON DESCRIPTION DES FONCTIONS", markdown=False) is None
+    pages = [PageText(1, "# BOUTON DESCRIPTION\n1 ON/OFF Appuyez trois secondes pour mettre l onduleur en marche.")]
+    assert [c.section for c in chunk_pages(pages, markdown_headings=False)] == [None]
+    assert [c.section for c in chunk_pages(pages)] == ["BOUTON DESCRIPTION"]  # Markdown text
+
+
+def test_passages_record_the_page_they_end_on():
+    pages = [PageText(4, "Article 7\nProcedure\n" + "Phrase de la page quatre. " * 20),
+             PageText(5, "Phrase de la page cinq. " * 5)]
+    chunks = chunk_pages(pages, chunk_size=2000, chunk_overlap=0)
+    assert [(c.page, c.page_end) for c in chunks] == [(4, 5)]

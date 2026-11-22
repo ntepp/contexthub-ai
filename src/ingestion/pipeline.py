@@ -127,6 +127,8 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
         split_definitions=settings.chunk_definitions,
         references=heading_refs,
         technical_chunk_size=settings.chunk_size_technical or None,
+        # "# …" lines are headings in Markdown, Word and HTML text, not in PDF pages or scans.
+        markdown_headings=not loaded.page_count,
     )
     if not chunks:
         if loaded.ocr_attempted:
@@ -168,6 +170,7 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
                         "filename": doc.filename,
                         "doc_title": act.label if act else None,
                         "page": chunk.page,
+                        **({"page_end": chunk.page_end} if chunk.page_end != chunk.page else {}),
                         "section": chunk.section,
                         "section_path": chunk.section_path,
                         # Connector pages: the citation opens the page in its own system.

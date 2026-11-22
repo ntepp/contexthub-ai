@@ -48,6 +48,7 @@ _HEADINGS: list[tuple[int, re.Pattern[str]]] = [
     (6, re.compile(r"^(?P<kind>Article|ARTICLE)\s+(?P<num>\d+(?:\s?(?:bis|ter|quater|[a-z]))?|premier|1er)" + _TAIL)),
 ]
 _MARKDOWN = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<title>.{1,200})$")
+_TOC_LINE = re.compile(r"(?:\.\s?){4,}\s*\d{1,4}\s*$|…\s*\d{1,4}\s*$")
 
 # Technical documents. "3.2.2 Touches de contrôle et d'utilisation" (two levels at least: a
 # single "3 phases en entrée" is a sentence); level 7 and below, under Article (6).
@@ -72,17 +73,20 @@ _BULLET_ITEM = re.compile(r"^[-•*]\s+(?P<rest>\S.*)$")
 _TERM = re.compile(r"^(?:\*\*(?P<bold>[^*]{1,80})\*\*|[«\"“]\s*(?P<quoted>[^»\"”]{1,80}?)\s*[»\"”]|(?P<plain>[^:,;]{1,60})\s*:)")
 
 
-def detect_heading(line: str) -> tuple[int, str, bool] | None:
+def detect_heading(line: str, markdown: bool = True) -> tuple[int, str, bool] | None:
     """Return (level, label, expects_title) if the line is a structural heading.
 
     ``expects_title`` is true for legal headings without an inline title: EU texts put
-    the title ("Transposition", "Agrément") on the following line.
+    the title ("Transposition", "Agrément") on the following line. ``markdown``: whether
+    "# Title" lines are headings — they are in Markdown, Word and HTML (the loaders write
+    them), not in a PDF page, where "# BOUTON DESCRIPTION" is a table's first column. A table
+    of contents line ("ANNEXE - Tableau ........ 34") is not a heading.
     """
-    if not line or len(line) > 160:
+    if not line or len(line) > 160 or _TOC_LINE.search(line):
         return None
     md = _MARKDOWN.match(line)
     if md:
-        return len(md.group("hashes")), md.group("title").strip(), False
+        return (len(md.group("hashes")), md.group("title").strip(), False) if markdown else None
     for level, pattern in _HEADINGS:
         match = pattern.match(line)
         if match:
@@ -131,7 +135,7 @@ def _technical_heading(line: str) -> tuple[int, str, bool] | None:
     return None
 
 
-def is_technical(pages: list[PageText]) -> bool:
+def is_technical(pages: list[PageText], markdown: bool = True) -> bool:
     """More numbered headings ("3.2.2 Titre") than legal ones, and at least three."""
     numbered = legal = 0
     for page in pages:
@@ -139,7 +143,7 @@ def is_technical(pages: list[PageText]) -> bool:
             line = raw.strip()
             if not line:
                 continue
-            found = detect_heading(line)
+            found = detect_heading(line, markdown)
             if found and not _MARKDOWN.match(line):
                 legal += 1
             elif numbered_heading(line):
@@ -163,6 +167,7 @@ class Chunk:
     page: int | None
     section: str | None
     section_path: list[str] = field(default_factory=list)
+    page_end: int | None = None  # page the passage ends on (citations open ``page``)
 
 
 @dataclass
@@ -180,7 +185,7 @@ def _paragraph_break(section: _Section, page: int | None) -> None:
         section.lines.append(("", page))
 
 
-def _sections(pages: list[PageText], technical: bool = False) -> list[_Section]:
+def _sections(pages: list[PageText], technical: bool = False, markdown: bool = True) -> list[_Section]:
     """Cut ``pages`` at headings. ``technical``: numbered headings too, paragraph breaks kept
     (as empty lines), a heading identical to the one open at its level skipped (a chapter
     title repeated at the top of each page)."""
@@ -196,7 +201,9 @@ def _sections(pages: list[PageText], technical: bool = False) -> list[_Section]:
                 if technical:
                     _paragraph_break(current, page.number)
                 continue
-            heading = detect_heading(line) or (_technical_heading(line) if technical else None)
+            heading = detect_heading(line, markdown) or (
+                _technical_heading(line) if technical else None
+            )
             if heading and technical and path.get(heading[0]) == heading[1]:
                 continue  # running chapter header, not a new section
             if heading:
@@ -307,6 +314,7 @@ def _emit(
         if not is_meaningful(piece, min_alpha_ratio):
             continue
         page = page_numbers[max(0, bisect.bisect_right(offsets, position) - 1)]
+        page_end = page_numbers[max(0, bisect.bisect_right(offsets, position + len(piece) - 1) - 1)]
         header = " › ".join(([doc_label] if doc_label else []) + path)
         content = f"[{header}]\n{piece}" if header else piece
         chunks.append(
@@ -316,6 +324,7 @@ def _emit(
                 page=page,
                 section=path[-1] if path else None,
                 section_path=list(path),
+                page_end=page_end,
             )
         )
     return chunks
@@ -337,6 +346,7 @@ def chunk_pages(
     split_definitions: bool = True,
     references: Sequence[str] = (),
     technical_chunk_size: int | None = None,
+    markdown_headings: bool = True,
 ) -> list[Chunk]:
     """``doc_label`` (e.g. "MiFID II — Directive 2014/65/UE") and the document's prominent
     product ``references`` head every chunk's path, so that the embedding and the full-text
@@ -344,16 +354,17 @@ def chunk_pages(
 
     ``technical_chunk_size``: when set and the document is technical (:func:`is_technical`),
     it is cut as a technical document with passages of that size; tables of figures are
-    content there, so fewer letters are required for a passage to be kept."""
+    content there, so fewer letters are required for a passage to be kept.
+    ``markdown_headings``: false for PDF pages and scans, where a "# …" line is not a heading."""
     doc_label = context_label(doc_label, references)
-    technical = technical_chunk_size is not None and is_technical(pages)
+    technical = technical_chunk_size is not None and is_technical(pages, markdown_headings)
     if technical:
         chunk_size = technical_chunk_size
         chunk_overlap = min(chunk_overlap, chunk_size // 5)
     min_alpha = 0.25 if technical else 0.4
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks: list[Chunk] = []
-    for section in _sections(pages, technical):
+    for section in _sections(pages, technical, markdown_headings):
         if section.body_lines == 0:
             continue
         definitions = definition_items(section) if split_definitions else None

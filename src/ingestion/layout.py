@@ -42,7 +42,7 @@ def running_lines(pages: Sequence[PageText], min_share: float = 0.4, min_pages: 
             key = _normalise(line)
             # A heading is structure, not a running line, even when every page starts with
             # one ("Article 93", "Article 94"… are one line once digits are ignored).
-            if not key or key in seen or len(line) > 160 or detect_heading(line):
+            if not key or key in seen or len(line) > 160 or detect_heading(line, markdown=False):
                 continue
             seen.add(key)
             pages_with[key] += 1
@@ -101,7 +101,7 @@ def document_title(pages: Sequence[PageText], running: Sequence[str], metadata_t
     for line in (line.strip() for line in texts[0].text.splitlines()):
         if not line:
             continue
-        if detect_heading(line):
+        if detect_heading(line, markdown=False):
             break  # structured from the first line on: the section path says it all
         if len(parts) >= 3 or len(" — ".join([*parts, line])) > _MAX_TITLE:
             break
