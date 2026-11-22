@@ -299,7 +299,7 @@ def test_without_tesseract_text_is_indexed_and_scanned_pages_flagged(admin, coll
     doc = _doc(admin, upload(admin, collection["id"], "m.pdf", _mixed_pdf()).json()["id"])
     assert doc["status"] == "ready"
     assert (doc["read_mode"], doc["ocr_low_pages"], doc["ocr_pages"]) == ("partial", [2], 0)
-    assert any("sans couche texte ignorée(s)" in w for w in doc["warnings"])
+    assert any("sans couche texte exploitable non lue(s)" in w for w in doc["warnings"])
 
     img = _doc(admin, upload(admin, collection["id"], "s.png", image_bytes(scan_image(), "PNG"), PNG).json()["id"])
     assert img["status"] == "failed" and "Tesseract est absent" in img["error_message"]

@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # A PDF page whose text layer has fewer letters and digits than this is read by OCR
     # (the native text is kept when OCR does not find more).
     ocr_min_page_chars: int = 50
+    # A PDF page whose extracted text is mostly unreadable — share of its letters and glyphs
+    # that form plausible words below this (0-1): private-use glyphs of fonts without a
+    # Unicode table, stray labels of a drawing whose text is an image — is read by OCR like a
+    # page without text, whatever its length (the native text is kept when OCR reads less).
+    ocr_min_text_quality: float = 0.5
     # Pages whose mean OCR word confidence (0-100) is below this are reported as badly read.
     ocr_min_confidence: float = 60.0
     ocr_dpi: int = 300  # rendering resolution of PDF pages, target resolution of scans

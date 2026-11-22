@@ -18,7 +18,7 @@ from PIL import Image
 from src.config import get_settings
 from src.ingestion.filetypes import IMAGE_TYPES, SUPPORTED_TYPES, IngestionError, decode_text
 from src.ocr.base import OcrEngine, OcrError
-from src.ocr.reader import read_page, useful_chars
+from src.ocr.reader import read_page, readable_chars, text_quality, useful_chars
 from src.ocr.registry import get_ocr_engine, ocr_languages
 from src.utils.logging_config import get_logger
 
@@ -26,6 +26,7 @@ log = get_logger()
 
 # Below this many letters and digits a page has no text layer at all (as opposed to a poor
 # one, see OCR_MIN_PAGE_CHARS): only such pages are read by OCR when they hold no image.
+# A page whose text layer cannot be read (OCR_MIN_TEXT_QUALITY) is read by OCR in any case.
 _NO_TEXT_CHARS = 20
 _BLANK_CHECK_DPI = 50
 
@@ -83,8 +84,11 @@ def _read_pages(
     render: Callable[[int], Image.Image],
     engine: OcrEngine,
     options: OcrOptions,
+    unreadable: frozenset[int] = frozenset(),
 ) -> None:
-    """OCR ``indices`` of ``loaded.pages`` in place; keep the native text when it is richer."""
+    """OCR ``indices`` of ``loaded.pages`` in place; keep the native text when it is richer.
+    For the ``unreadable`` pages (text layer below OCR_MIN_TEXT_QUALITY), only the plausible
+    words of the native text count, not its digits."""
     settings = get_settings()
     languages = ocr_languages()
     confidences: list[float] = []
@@ -110,7 +114,9 @@ def _read_pages(
         if reading is not None and not reading.blank:
             if reading.rotation or reading.skew:
                 log.info("[ocr] page %d redressée (%d°, %.1f°)", number, reading.rotation, reading.skew)
-            ocr_chars, native_chars = useful_chars(reading.text), useful_chars(page.text)
+            # Readable characters, not raw ones: a garbled text layer must not outweigh a reading.
+            ocr_chars = readable_chars(reading.text)
+            native_chars = readable_chars(page.text, digits=index not in unreadable)
             if ocr_chars and (options.all_pages or ocr_chars > native_chars):
                 page.text = reading.text
                 loaded.ocr_pages += 1
@@ -183,6 +189,7 @@ def load_pdf(path: Path, options: OcrOptions | None = None) -> LoadedDocument:
     settings = get_settings()
     pages: list[PageText] = []
     poor: list[int] = []
+    unreadable: set[int] = set()
     for index, page in enumerate(reader.pages):
         try:
             content = page.extract_text() or ""
@@ -190,7 +197,14 @@ def load_pdf(path: Path, options: OcrOptions | None = None) -> LoadedDocument:
             log.warning("[ingestion] page %d illisible : %s", index + 1, exc)
             content = ""
         chars = useful_chars(content)
-        if chars < settings.ocr_min_page_chars and (chars < _NO_TEXT_CHARS or _has_image(page)):
+        quality = text_quality(content)
+        if quality is not None and quality < settings.ocr_min_text_quality:
+            # A text layer that cannot be read (fonts without a Unicode table, labels of a
+            # drawing whose text is an image) is treated as no text layer at all.
+            log.info("[ingestion] page %d : texte extrait inexploitable (qualité %.2f), lecture OCR", index + 1, quality)
+            poor.append(index)
+            unreadable.add(index)
+        elif chars < settings.ocr_min_page_chars and (chars < _NO_TEXT_CHARS or _has_image(page)):
             poor.append(index)
         pages.append(PageText(index + 1, content))
 
@@ -204,14 +218,14 @@ def load_pdf(path: Path, options: OcrOptions | None = None) -> LoadedDocument:
         loaded.low_pages = unread
         if unread:
             loaded.warnings.append(
-                f"{len(unread)} page(s) sans couche texte ignorée(s) (OCR désactivé ou Tesseract absent) : "
+                f"{len(unread)} page(s) sans couche texte exploitable non lue(s) (OCR désactivé ou Tesseract absent) : "
                 f"page(s) {_pages_label(unread)}."
             )
         return loaded
     if options.mode == "defer":
         raise OcrRequired()
     with _pdf_renderer(path, settings.ocr_dpi) as render:
-        _read_pages(loaded, targets, render, engine, options)
+        _read_pages(loaded, targets, render, engine, options, frozenset(unreadable))
     return loaded
 
 
