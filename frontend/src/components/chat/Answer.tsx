@@ -3,8 +3,17 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link } from 'react-router-dom'
 import { ChartColumn, ThumbsDown, ThumbsUp } from 'lucide-react'
-import { api, type ChatMessage } from '@/lib/api'
+import { api, type ChatMessage, type StreamStep } from '@/lib/api'
 import { cn } from '@/lib/utils'
+
+/** Shown under the question until the first words of the answer arrive. */
+const STEP_LABELS: Record<StreamStep, string> = {
+  condense: 'Lecture de votre question…',
+  retrieve: 'Recherche dans vos documents…',
+  rerank: 'Relecture des passages…',
+  plan: 'Recherche dans vos documents…',
+  generate: 'Rédaction…',
+}
 
 const CITATION = /\[(\d+(?:\s*[,;]\s*\d+)*)\]/g
 
@@ -118,7 +127,10 @@ export function Answer({ message, streaming, activeSource, onCite }: Props) {
             {content}
           </ReactMarkdown>
         ) : (
-          <p className="font-sans text-sm text-faint">Recherche dans vos documents…</p>
+          <p role="status" aria-live="polite" className="flex items-center gap-2 font-sans text-sm text-faint">
+            {streaming && <span aria-hidden className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-ledger" />}
+            {STEP_LABELS[message.step ?? 'retrieve']}
+          </p>
         )}
         {streaming && message.content && <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-ledger align-middle" />}
       </div>

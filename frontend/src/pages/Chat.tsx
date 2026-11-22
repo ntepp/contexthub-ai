@@ -149,6 +149,8 @@ export function Chat() {
           if (event.type === 'meta' && !conversationId) {
             created = event.conversation_id
             createdHere.current = event.conversation_id
+          } else if (event.type === 'status') {
+            updateLast((m) => ({ ...m, step: event.step }))
           } else if (event.type === 'token') {
             updateLast((m) => ({ ...m, content: m.content + event.content }))
           } else if (event.type === 'final') {

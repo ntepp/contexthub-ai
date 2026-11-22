@@ -193,6 +193,8 @@ export interface ChatMessage {
   latency_seconds?: number | null
   feedback?: number | null
   pending?: boolean
+  /** Client side only: step being prepared while no text has arrived yet (`status` events). */
+  step?: StreamStep
   error?: boolean
   /** Client side only: why the LLM gateway refused to answer, when it did. */
   code?: GatewayErrorCode
@@ -586,8 +588,14 @@ export const usage = {
 /** Why the LLM gateway refused a chat call (`src/llm/gateway.py`). */
 export type GatewayErrorCode = 'budget_exceeded' | 'rate_limited' | 'unreachable' | 'unavailable' | 'rejected'
 
+/** Step of the answer being prepared (`src/rag/rag_pipeline.py`, `STREAM_STEPS`). */
+export type StreamStep = 'condense' | 'retrieve' | 'rerank' | 'plan' | 'generate'
+
+/** `/chat/stream` events. Keep-alive comments (`: ping`) carry no `data:` line and are skipped. */
 export type StreamEvent =
   | { type: 'meta'; conversation_id: string; model: string }
+  /** Progress only, never part of the answer. */
+  | { type: 'status'; step: StreamStep }
   | { type: 'token'; content: string }
   | ({ type: 'final' } & AnswerResult)
   /** `code` and `status` are only present when the LLM gateway refused the call. */
@@ -650,6 +658,7 @@ export async function streamAsk(
     const frames = buffer.split('\n\n')
     buffer = frames.pop() ?? ''
     for (const frame of frames) {
+      // A frame without a data line is an SSE comment: the server's keep-alive.
       const line = frame.split('\n').find((l) => l.startsWith('data: '))
       if (!line) continue
       try {
