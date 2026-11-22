@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx
@@ -243,20 +244,80 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+# SSE comment: ignored by every client, but bytes on the wire for the proxies in between.
+SSE_HEARTBEAT = ": ping\n\n"
+
+
+async def with_heartbeat(source: AsyncIterator[dict], interval: float) -> AsyncIterator[dict | None]:
+    """The items of ``source``, and ``None`` each time ``interval`` seconds pass without one.
+
+    ``source`` is consumed by a task of its own, never cancelled by a timeout: waiting for
+    the next item is what times out, not the work producing it. Its errors are re-raised
+    here; closing this generator (client gone) cancels the task."""
+    queue: asyncio.Queue[tuple[bool, object]] = asyncio.Queue()
+    end = object()
+
+    async def pump() -> None:
+        try:
+            async for item in source:
+                queue.put_nowait((True, item))
+        except Exception as exc:  # CancelledError (client gone) is not caught
+            queue.put_nowait((False, exc))
+        else:
+            queue.put_nowait((True, end))
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                ok, item = await asyncio.wait_for(queue.get(), interval)
+            except TimeoutError:
+                yield None
+                continue
+            if not ok:
+                raise item  # type: ignore[misc]
+            if item is end:
+                return
+            yield item  # type: ignore[misc]
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 @router.post("/chat/stream")
 async def ask_stream(
     body: AskRequest, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
+    """Server-Sent Events, one JSON object per ``data:`` line, in this order:
+
+    * ``meta`` (conversation id, model), at once;
+    * ``status`` (``step``: condense, retrieve, rerank, plan, generate) while the answer is
+      prepared — progress only, never part of the answer;
+    * ``token`` (``content``): the answer, from the generate node only (or the refusal, at
+      once, when retrieval found nothing);
+    * ``final`` (the stored answer: sources, ids…) then ``done``; or ``error`` instead.
+
+    An SSE comment ``: ping`` is sent whenever nothing else was sent for
+    ``SSE_HEARTBEAT_SECONDS``, so that no proxy closes a stream that is still working."""
     prepared = _prepare(body, request, user, db, await _catalogue())
 
     async def events():
         yield _sse({"type": "meta", "conversation_id": str(prepared.conversation_id), "model": prepared.model_id})
         result: RAGResult | None = None
         try:
-            async for event in stream_answer(
-                prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
+            async for event in with_heartbeat(
+                stream_answer(
+                    prepared.question, prepared.collection_ids, prepared.history, prepared.model_id, prepared.user_id
+                ),
+                get_settings().sse_heartbeat_seconds,
             ):
-                if event["type"] == "token":
+                if event is None:
+                    yield SSE_HEARTBEAT
+                elif event["type"] in ("token", "status"):
                     yield _sse(event)
                 elif event["type"] == "result":
                     payload = {k: v for k, v in event.items() if k != "type"}

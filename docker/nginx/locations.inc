@@ -14,9 +14,12 @@ location /api/ {
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Request-ID $request_id;
-    # Server-Sent Events: stream tokens as they come.
+    # Server-Sent Events: stream tokens as they come (the API also sends X-Accel-Buffering: no).
     proxy_buffering off;
     proxy_cache off;
+    # Idle time allowed between two reads from the API. /chat/stream sends a ": ping" comment
+    # every SSE_HEARTBEAT_SECONDS (10 s) while it prepares an answer, so only a stuck API or a
+    # long non-streamed call (/chat/ask, upload) gets near this limit.
     proxy_read_timeout 300s;
 }
 

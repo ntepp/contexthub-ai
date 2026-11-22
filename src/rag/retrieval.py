@@ -155,6 +155,17 @@ def sub_query_rerank_limit(used: int, sub_queries: int) -> int:
     return max(0, min(settings.rerank_candidates, (settings.rerank_max_pairs - used) // sub_queries))
 
 
+async def _announce(step: str) -> None:
+    """Progress event for the chat stream (``{"type": "status", "step": …}``); a no-op
+    outside a LangGraph run (diagnostic, scripts)."""
+    try:
+        from langchain_core.callbacks.manager import adispatch_custom_event
+
+        await adispatch_custom_event("status", {"step": step})
+    except RuntimeError:
+        pass
+
+
 async def search(
     query: str,
     collection_ids: Sequence[uuid.UUID],
@@ -209,6 +220,7 @@ async def search(
 
     reranked = reranker.Reranked([c.chunk for c in eligible])
     if reranker.enabled() and min(limit, len(eligible)) >= 2:
+        await _announce("rerank")
         reranked = await asyncio.to_thread(reranker.rerank, query, [c.chunk for c in eligible], limit)
         log.info(
             "[rerank] %d paire(s) sur %d candidat(s) éligible(s) — %d notée(s), %d en cache, %.2fs",

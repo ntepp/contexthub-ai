@@ -221,6 +221,10 @@ class Settings(BaseSettings):
     # refusals stay LLM-free).
     agentic_retrieval: bool = True
     agentic_max_queries: int = 3
+    # /chat/stream sends an SSE comment (": ping") when nothing else was sent for this long,
+    # so that no proxy (Cloudflare closes a silent response after ~100 s, nginx after
+    # proxy_read_timeout) cuts the stream while the answer is being prepared.
+    sse_heartbeat_seconds: float = Field(default=10.0, gt=0)
     no_answer_text: str = DEFAULT_NO_ANSWER
     product_mismatch_text: str = DEFAULT_PRODUCT_MISMATCH
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH

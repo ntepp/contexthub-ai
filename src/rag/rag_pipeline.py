@@ -523,6 +523,11 @@ async def answer_question(
     return _result(state, started)
 
 
+# Steps announced to the chat stream ({"type": "status", "step": …}); "rerank" comes from
+# inside retrieve / plan (src/rag/retrieval.py) as a LangGraph custom event.
+STREAM_STEPS = ("condense", "retrieve", "rerank", "plan", "generate")
+
+
 async def stream_answer(
     question: str,
     collection_ids: Sequence[uuid.UUID | str],
@@ -530,18 +535,27 @@ async def stream_answer(
     model_id: str | None = None,
     user_id: uuid.UUID | str | None = None,
 ) -> AsyncIterator[dict]:
-    """Yield ``{"type": "token", "content"}`` events, then one ``{"type": "result", ...}``.
+    """Yield ``{"type": "status", "step"}`` and ``{"type": "token", "content"}`` events, then
+    one ``{"type": "result", ...}``.
 
-    Only tokens produced by the ``generate`` node are forwarded — the ``condense``
-    node also calls the LLM and its output must not reach the user. When retrieve
+    Only tokens produced by the ``generate`` node are forwarded — the ``condense`` and
+    ``plan`` nodes also call the LLM and their output must not reach the user. When retrieve
     short-circuits, generate never calls the LLM, so the refusal is emitted from the
     retrieve end event, otherwise the UI would render an empty bubble.
+
+    ``status`` events say which step is running (``STREAM_STEPS``), so that the UI shows
+    progress while nothing is written yet. They are never part of the answer, and none
+    follows a short-circuited refusal. ``condense`` is announced only when there is a
+    history to read, ``plan`` only when agentic retrieval is on.
     """
+    settings = get_settings()
     started = time.time()
     initial = await _initial_state(question, collection_ids, history, model_id, user_id)
+    planning = settings.agentic_retrieval and settings.agentic_max_queries >= 2
+    answered = False  # the short-circuited refusal was emitted: nothing more to announce
     final_state: dict | None = None
     async for event in graph().astream_events(initial, version="v2"):
-        kind = event["event"]
+        kind, name = event["event"], event.get("name")
         node = (event.get("metadata") or {}).get("langgraph_node")
         if kind == "on_chat_model_stream" and node == "generate":
             chunk = event["data"]["chunk"]
@@ -550,11 +564,20 @@ async def stream_answer(
             )
             if content:
                 yield {"type": "token", "content": content}
-        elif kind == "on_chain_end" and event.get("name") == "retrieve":
+        elif kind == "on_chain_start" and name in STREAM_STEPS and node == name:
+            skipped = (name == "condense" and not initial["history"]) or (name == "plan" and not planning)
+            if not answered and not skipped:
+                yield {"type": "status", "step": name}
+        elif kind == "on_custom_event" and name == "status":
+            step = (event.get("data") or {}).get("step")
+            if not answered and step in STREAM_STEPS:
+                yield {"type": "status", "step": step}
+        elif kind == "on_chain_end" and name == "retrieve":
             output = event["data"].get("output") or {}
             if output.get("answer"):
+                answered = True
                 yield {"type": "token", "content": output["answer"]}
-        elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+        elif kind == "on_chain_end" and name == "LangGraph":
             final_state = event["data"].get("output")
     if final_state is None:  # pragma: no cover - defensive
         raise RuntimeError("Le graphe RAG n'a pas produit d'état final.")
