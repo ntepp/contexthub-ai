@@ -161,6 +161,7 @@ def _persist(prepared: PreparedAsk, result: RAGResult) -> uuid.UUID:
             "question": prepared.question,
             "standalone_question": result.standalone_question,
             "search_queries": result.search_queries,
+            "search_rewrites": result.search_rewrites,
             "answer": result.answer[:_AUDIT_TEXT_LIMIT],
             "refused": result.refused,
             "model": result.model,

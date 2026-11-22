@@ -8,8 +8,12 @@
   to the refusal sentence — without calling the LLM — when nothing qualifies.
 * ``plan`` (agentic retrieval) lets the LLM decide whether the question needs several
   searches — one per topic, document or step — runs the extra ones and merges the
-  results so that every sub-question gets passages in the context. It only runs once
-  ``retrieve`` found something, so an unanswerable question still costs no LLM call.
+  results so that every sub-question gets passages in the context. In the same call
+  (QUERY_REWRITE) it rewords the question in the vocabulary the documents likely use; the
+  rewordings are searched too and fused (RRF) with the question's own ranking, which keeps
+  deciding grounding and confidence. It only runs once ``retrieve`` found something, so an
+  unanswerable question still costs no LLM call and a rewording never turns a refusal into
+  an answer.
 * ``generate`` answers from numbered sources and must cite them as ``[n]``; a "how to /
   what to do" question is answered as numbered steps rebuilt from every relevant source,
   interface elements named after their description in the sources, conditions and limits
@@ -114,6 +118,32 @@ Reply with JSON only, for example {{"queries": ["first search", "second search"]
 
 Question: {question}"""
 
+# With QUERY_REWRITE, the planner's single call also rewords the question in the documents'
+# vocabulary (searched on top of it, fused with its ranking): no extra round-trip.
+PLAN_REWRITE_PROMPT = """You plan the searches needed to answer a question from a document base.
+{tasks}
+
+Rules:
+- Keep the language of the question.
+- Each query must make sense on its own: repeat the subject, never write "it" or "they".
+- Keep the names, references, numbers and dates the question gives.
+- Do not answer the question.
+
+Reply with JSON only, for example {example}
+
+Question: {question}"""
+
+_SPLIT_TASK = """- "queries": if the question asks about several distinct things (several topics, documents,
+  rules or steps), one self-contained search query per thing, at most {max_queries}. Otherwise
+  the question itself as the only query."""
+
+_REWRITE_TASK = """- "rewrites": at most {max_rewrites} rewordings of the whole question in the words its answer is
+  likely written with in the documents: the technical, formal, legal or administrative terms an
+  author of such documents would use instead of the everyday words of the question (the
+  official name of a component, a function, an operation, a right or a procedure). A rewording
+  asks exactly what the question asks: no added fact, no assumption, no answer. An empty list
+  when the question already uses those words."""
+
 _CITATION_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -140,6 +170,8 @@ class State(TypedDict, total=False):
     user_id: str
     standalone_question: str
     search_queries: list[str]
+    # Rewordings of the question in the documents' vocabulary searched by ``plan`` (QUERY_REWRITE).
+    search_rewrites: list[str]
     # Kept passages, best first (the planner merges its sub-queries' with these), and the
     # context the LLM reads: the same passages with their neighbours.
     anchors: list[RetrievedChunk]
@@ -163,6 +195,9 @@ class RAGResult:
     standalone_question: str
     # Searches actually run: the question itself, then the sub-queries planned by the LLM.
     search_queries: list[str] = field(default_factory=list)
+    # Rewordings of the question searched on top of it (QUERY_REWRITE); never shown to the LLM
+    # that answers, which reads the question as asked.
+    search_rewrites: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -292,6 +327,64 @@ def parse_plan(reply: str, question: str, max_queries: int) -> list[str]:
     return queries if len(queries) >= 3 else [question]
 
 
+def plan_prompt(question: str, split: bool, rewrite: bool) -> str:
+    """The planner's prompt: sub-queries (``split``, AGENTIC_RETRIEVAL) and / or rewordings in
+    the documents' vocabulary (``rewrite``, QUERY_REWRITE). Without rewording, the prompt is
+    exactly the sub-query planner's."""
+    settings = get_settings()
+    if not rewrite:
+        return PLAN_PROMPT.format(max_queries=settings.agentic_max_queries, question=question)
+    tasks = [_REWRITE_TASK.format(max_rewrites=settings.query_rewrite_max)]
+    example = '{"rewrites": ["the question in the words of the documents"]}'
+    if split:
+        tasks.insert(0, _SPLIT_TASK.format(max_queries=settings.agentic_max_queries))
+        example = '{"queries": ["first search", "second search"], "rewrites": ["the question in the words of the documents"]}'
+    return PLAN_REWRITE_PROMPT.format(tasks="\n".join(tasks), example=example, question=question)
+
+
+def parse_rewrites(reply: str, taken: Sequence[str], max_rewrites: int) -> list[str]:
+    """Rewordings from the planner's JSON reply (``"rewrites"``): up to ``max_rewrites``, none
+    identical to the question, to a sub-query (``taken``) or to one another. Anything unusable
+    gives none: rewording can only widen retrieval, never break it."""
+    match = _JSON_OBJECT_RE.search(reply or "")
+    if not match or max_rewrites < 1:
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return []
+    items = data.get("rewrites") if isinstance(data, dict) else None
+    seen = {_normalise(text) for text in taken}
+    rewrites: list[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, str) or not item.strip() or len(item) > 500:
+            continue
+        key = _normalise(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        rewrites.append(" ".join(item.split()))
+        if len(rewrites) >= max_rewrites:
+            break
+    return rewrites
+
+
+def fuse(rankings: Sequence[Sequence[RetrievedChunk]], limit: int) -> list[RetrievedChunk]:
+    """Reciprocal Rank Fusion of rankings of the same need (the question and its rewordings):
+    a passage found by several formulations comes first; ties keep the order of the first
+    ranking (the question's). The passage object kept is the first one seen."""
+    k = get_settings().rrf_k
+    scores: dict[uuid.UUID, float] = {}
+    first: dict[uuid.UUID, RetrievedChunk] = {}
+    for results in rankings:
+        for rank, chunk in enumerate(results, start=1):
+            scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (k + rank)
+            first.setdefault(chunk.id, chunk)
+    order = {chunk_id: position for position, chunk_id in enumerate(first)}
+    ranked = sorted(first, key=lambda chunk_id: (-scores[chunk_id], order[chunk_id]))
+    return [first[chunk_id] for chunk_id in ranked[:limit]]
+
+
 def interleave(ranked: Sequence[Sequence[RetrievedChunk]], limit: int) -> list[RetrievedChunk]:
     """Round-robin over the per-query rankings so each search contributes passages."""
     merged: list[RetrievedChunk] = []
@@ -405,52 +498,70 @@ async def retrieve(state: State) -> dict:
 
 
 async def plan(state: State) -> dict:
-    """Agentic retrieval: the LLM decides which extra searches the question needs."""
+    """Agentic retrieval: the LLM decides which extra searches the question needs (sub-queries,
+    AGENTIC_RETRIEVAL) and rewords it in the documents' vocabulary (QUERY_REWRITE), in one call.
+
+    Only after ``retrieve`` kept passages for the question itself: a rewording never turns a
+    refusal into an answer, and each extra search applies the grounding threshold."""
     settings = get_settings()
-    if state.get("refused") or not settings.agentic_retrieval or settings.agentic_max_queries < 2:
+    split = settings.agentic_retrieval and settings.agentic_max_queries >= 2
+    rewrite = settings.query_rewrite and settings.query_rewrite_max >= 1
+    if state.get("refused") or not (split or rewrite):
         RAG_RETAINED_CHUNKS.observe(len(state.get("context") or []))
         return {}
     question = state.get("standalone_question") or state["question"]
     started = time.perf_counter()
     llm = initialize_model_llm(_spec(state), user_id=state.get("user_id"), step="plan")
-    response = await llm.ainvoke(
-        [HumanMessage(PLAN_PROMPT.format(max_queries=settings.agentic_max_queries, question=question))]
-    )
+    response = await llm.ainvoke([HumanMessage(plan_prompt(question, split, rewrite))])
     reply = response.content if isinstance(response.content, str) else str(response.content)
-    queries = parse_plan(reply, question, settings.agentic_max_queries)
-    if len(queries) == 1:
+    queries = parse_plan(reply, question, settings.agentic_max_queries) if split else [question]
+    rewrites = parse_rewrites(reply, queries, settings.query_rewrite_max) if rewrite else []
+    if len(queries) == 1 and not rewrites:
         log.info("[plan] une seule recherche suffit")
         RAG_RETAINED_CHUNKS.observe(len(state["context"]))
         return {"timings": {"plan": time.perf_counter() - started}}
 
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
-    # Sub-queries keep the question's product references, even when the planner drops them.
+    # Sub-queries and rewordings keep the question's product references, even when the planner drops them.
     references = _references(state)
-    # The sub-queries share what the question left of RERANK_MAX_PAIRS: planning never
-    # multiplies the cost of re-ranking.
+    # Sub-queries and rewordings share what the question left of RERANK_MAX_PAIRS: planning
+    # never multiplies the cost of re-ranking.
+    extra_queries = [*queries[1:], *rewrites]
     limit = retrieval.sub_query_rerank_limit(
-        int((state.get("timings") or {}).get("rerank_pairs", 0)), len(queries) - 1
+        int((state.get("timings") or {}).get("rerank_pairs", 0)), len(extra_queries)
     )
     extra = await asyncio.gather(
-        *(retrieval.search(q, collection_ids, references, rerank_limit=limit) for q in queries[1:])
+        *(retrieval.search(q, collection_ids, references, rerank_limit=limit) for q in extra_queries)
     )
-    rankings = [state.get("anchors") or state["context"]] + [found.kept for found in extra]
+    sub_kept = [found.kept for found in extra[: len(queries) - 1]]
+    rewrite_kept = [found.kept for found in extra[len(queries) - 1 :]]
+    own = state.get("anchors") or state["context"]
+    # The question's ranking, fused with its rewordings' (same need), comes first in the merge.
+    if rewrites:
+        own = fuse([own, *rewrite_kept], settings.retrieval_top_k)
+    rankings = [own, *sub_kept]
     merged = interleave(rankings, settings.retrieval_top_k)
     vector = await asyncio.to_thread(get_embeddings().embed_query, question)
     context = await retrieval.expand(merged, vector, collection_ids)
     RAG_RETAINED_CHUNKS.observe(len(merged))
     log.info(
-        "[plan] %d recherches : %s — retenus par recherche : %s",
+        "[plan] %d recherches : %s — reformulations : %s — retenus par recherche : %s",
         len(queries),
         " | ".join(queries),
-        ", ".join(str(len(r)) for r in rankings),
+        " | ".join(rewrites) or "aucune",
+        ", ".join(str(len(r)) for r in [state.get("anchors") or [], *sub_kept, *rewrite_kept]),
     )
+    # Confidence on what the question and its sub-queries found: a rewording written in the
+    # documents' words is closer to them by construction and would inflate it.
+    by_question = {c.id for results in [state.get("anchors") or [], *sub_kept] for c in results}
+    scored = [c for c in merged if c.id in by_question]
     return {
         "search_queries": queries,
+        "search_rewrites": rewrites,
         "anchors": merged,
         "context": context,
         "sources": build_sources(context),
-        "confidence_metric": confidence_from(merged),
+        "confidence_metric": confidence_from(scored) if scored else state.get("confidence_metric", 0.0),
         "timings": {"plan": time.perf_counter() - started, **_rerank_timings(extra)},
     }
 
@@ -546,6 +657,7 @@ def _result(state: dict, started: float, first_token: float | None = None) -> RA
         model=state["model_id"],
         standalone_question=state.get("standalone_question") or state["question"],
         search_queries=state.get("search_queries") or [],
+        search_rewrites=state.get("search_rewrites") or [],
         extra={"timings": dict(state.get("timings") or {})},
     )
 

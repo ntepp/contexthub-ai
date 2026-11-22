@@ -44,6 +44,7 @@ def test_a_procedure_question_is_answered_under_the_rule_with_its_citations(
     admin, member, member_user, collection, llm, monkeypatch
 ):
     monkeypatch.setattr(get_settings(), "agentic_retrieval", False)
+    monkeypatch.setattr(get_settings(), "query_rewrite", False)
     upload(admin, collection["id"], "panneau.pdf", MANUAL)
     grant(admin, collection["id"], member_user.id)
 
@@ -70,6 +71,7 @@ def test_a_procedure_the_sources_do_not_support_is_still_refused(
     admin, member, member_user, collection, llm, monkeypatch
 ):
     monkeypatch.setattr(get_settings(), "agentic_retrieval", False)
+    monkeypatch.setattr(get_settings(), "query_rewrite", False)
     upload(admin, collection["id"], "panneau.pdf", MANUAL)
     grant(admin, collection["id"], member_user.id)
     llm.responder = lambda messages: get_settings().no_answer_text

@@ -230,6 +230,12 @@ class Settings(BaseSettings):
     # so that no proxy (Cloudflare closes a silent response after ~100 s, nginx after
     # proxy_read_timeout) cuts the stream while the answer is being prepared.
     sse_heartbeat_seconds: float = Field(default=10.0, gt=0)
+    # Query rewording: the same planner call also rewords the question in the vocabulary the
+    # documents are likely to use (up to N rewordings), searched on top of it and fused with
+    # its ranking (RRF). No extra LLM call when AGENTIC_RETRIEVAL is on (one otherwise); only
+    # after the question itself found passages, so refusals stay LLM-free.
+    query_rewrite: bool = True
+    query_rewrite_max: int = 2
     no_answer_text: str = DEFAULT_NO_ANSWER
     product_mismatch_text: str = DEFAULT_PRODUCT_MISMATCH
     # Optional business context appended to the system prompt, e.g. "Tu assistes les équipes RH

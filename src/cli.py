@@ -179,7 +179,7 @@ def _explain_retrieval(args) -> int:
             f"{result.rerank_seconds:.2f} s ; colonne « CE » : score du cross-encoder, « - » : non re-classé."
         )
     print(
-        "Recherche de la question telle quelle : sans reformulation (historique) ni sous-requêtes du planificateur."
+        "Recherche de la question telle quelle : sans reformulation (historique, QUERY_REWRITE) ni sous-requêtes du planificateur."
     )
     if result.asked_refs:
         carrying = len(result.document_refs)

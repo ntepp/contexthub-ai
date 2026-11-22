@@ -41,8 +41,8 @@ from sqlalchemy import select
 
 from src.config import DEFAULT_PRODUCT_MISMATCH, get_settings
 from src.ingestion.references import matching, question_references
-from src.retrieval import rerank as reranker
 from src.rag import neighbours as nearby
+from src.retrieval import rerank as reranker
 from src.retrieval.embeddings import get_embeddings
 from src.retrieval.store import RetrievedChunk, get_store
 from src.utils.logging_config import get_logger
