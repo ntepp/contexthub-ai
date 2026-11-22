@@ -146,10 +146,18 @@ def _explain_retrieval(args) -> int:
             "retrieval_candidates": settings.retrieval_candidates,
             "retrieval_hybrid": settings.retrieval_hybrid,
             "reranker": settings.reranker,
+            "rerank_candidates": settings.rerank_candidates,
+            "rerank_max_pairs": settings.rerank_max_pairs,
             "retrieval_reference_boost": settings.retrieval_reference_boost,
             "retrieval_neighbours": settings.retrieval_neighbours,
             "retrieval_context_chars": settings.retrieval_context_chars,
-        }, "asked_refs": result.asked_refs, "notice": result.notice, "candidates": rows}, indent=2, ensure_ascii=False))
+        }, "asked_refs": result.asked_refs, "notice": result.notice, "rerank": {
+            "limit": result.rerank_limit,
+            "pairs": result.rerank_pairs,
+            "scored": result.rerank_scored,
+            "cached": result.rerank_pairs - result.rerank_scored,
+            "seconds": round(result.rerank_seconds, 3),
+        }, "candidates": rows}, indent=2, ensure_ascii=False))
         return 0
 
     kept = sum(1 for row in rows if row["status"] == "kept")
@@ -160,6 +168,13 @@ def _explain_retrieval(args) -> int:
         f"{settings.retrieval_candidates} candidats par liste, hybride {'oui' if settings.retrieval_hybrid else 'non'}, "
         f"re-classement {settings.reranker}"
     )
+    if settings.reranker != "none":
+        print(
+            f"Re-classement : {result.rerank_pairs} paire(s) (au plus {result.rerank_limit} premiers candidats "
+            f"éligibles ; RERANK_MAX_PAIRS={settings.rerank_max_pairs} par réponse), "
+            f"{result.rerank_scored} notée(s) par le modèle, {result.rerank_pairs - result.rerank_scored} en cache, "
+            f"{result.rerank_seconds:.2f} s ; colonne « CE » : score du cross-encoder, « - » : non re-classé."
+        )
     print(
         "Recherche de la question telle quelle : sans reformulation (historique) ni sous-requêtes du planificateur."
     )
@@ -178,8 +193,8 @@ def _explain_retrieval(args) -> int:
     )
     header = (
         f"{_cell('rang', 4)} {_cell('ctx', 3)} {_cell('statut', 7)} {_cell('distance', 8, '>')} {_cell('vect.', 5, '>')} "
-        f"{_cell('lex.', 5, '>')} {_cell('score lex', 9, '>')} {_cell('RRF', 7, '>')} {_cell('document', 34)} "
-        f"{_cell('page', 4, '>')} {_cell('section', 30)} {_cell('produit', 18)} raison"
+        f"{_cell('lex.', 5, '>')} {_cell('score lex', 9, '>')} {_cell('RRF', 7, '>')} {_cell('CE', 7, '>')} "
+        f"{_cell('document', 34)} {_cell('page', 4, '>')} {_cell('section', 30)} {_cell('produit', 18)} raison"
     )
     print(header)
     print("-" * len(header))
@@ -190,7 +205,7 @@ def _explain_retrieval(args) -> int:
             f"{_cell(_STATUS_LABELS.get(row['status'], row['status']), 7)} "
             f"{_cell(distance, 8, '>')} {_cell(row['vector_rank'], 5, '>')} "
             f"{_cell(row['lexical_rank'], 5, '>')} {_cell(row['lexical_score'], 9, '>')} "
-            f"{_cell(fused, 7, '>')} {_cell(row['document'], 34)} "
+            f"{_cell(fused, 7, '>')} {_cell(row['rerank_score'], 7, '>')} {_cell(row['document'], 34)} "
             f"{_cell(row['page'], 4, '>')} {_cell(row['section'], 30)} {_cell(_product_cell(row), 18)} "
             f"{row['reason'] or ''}"
         )

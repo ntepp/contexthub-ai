@@ -24,7 +24,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, StateGraph
@@ -103,6 +103,15 @@ def no_answer_text() -> str:
     return get_settings().no_answer_text
 
 
+def _add_timings(left: dict[str, float] | None, right: dict[str, float] | None) -> dict[str, float]:
+    """Costs written by the nodes, summed per key (re-ranking runs in ``retrieve`` and
+    again in ``plan``)."""
+    total = dict(left or {})
+    for key, value in (right or {}).items():
+        total[key] = total.get(key, 0) + value
+    return total
+
+
 class State(TypedDict, total=False):
     question: str
     history: list[tuple[str, str]]
@@ -120,6 +129,8 @@ class State(TypedDict, total=False):
     sources: list[dict]
     confidence_metric: float
     refused: bool
+    # Re-ranking so far (seconds, pairs, pairs scored): RERANK_MAX_PAIRS is per answer.
+    timings: Annotated[dict[str, float], _add_timings]
 
 
 @dataclass
@@ -283,12 +294,12 @@ def _spec(state: State) -> ModelSpec:
     return parse_model_id(state["model_id"])
 
 
-async def _search(
-    query: str, collection_ids: list[uuid.UUID], references: list[str] | None = None
-) -> tuple[list[RetrievedChunk], list[RetrievedChunk]]:
-    """(all candidates, grounded top-k) for one query."""
-    found = await retrieval.search(query, collection_ids, references)
-    return [c.chunk for c in found.candidates], found.kept
+def _rerank_timings(found: Sequence[retrieval.Retrieval]) -> dict[str, float]:
+    return {
+        "rerank": sum(f.rerank_seconds for f in found),
+        "rerank_pairs": sum(f.rerank_pairs for f in found),
+        "rerank_scored": sum(f.rerank_scored for f in found),
+    }
 
 
 def _references(state: State) -> list[str]:
@@ -330,6 +341,7 @@ async def retrieve(state: State) -> dict:
 
     found = await retrieval.retrieve_context(query, collection_ids, _references(state))
     results, kept = [c.chunk for c in found.candidates], found.kept
+    timings = _rerank_timings([found])
 
     log.info(
         "[retrieve] %d/%d candidats retenus (top_k=%d, max_distance=%.2f, hybride=%s) — distances: %s",
@@ -355,6 +367,7 @@ async def retrieve(state: State) -> dict:
             "sources": [],
             "confidence_metric": 0.0,
             "refused": True,
+            "timings": timings,
         }
     if len(found.context) > len(kept):
         log.info("[retrieve] %d passage(s) voisin(s) joint(s) au contexte", len(found.context) - len(kept))
@@ -366,6 +379,7 @@ async def retrieve(state: State) -> dict:
         "sources": build_sources(found.context),
         "confidence_metric": confidence_from(kept),
         "refused": False,
+        "timings": timings,
     }
 
 
@@ -390,8 +404,15 @@ async def plan(state: State) -> dict:
     collection_ids = [uuid.UUID(str(c)) for c in state.get("collection_ids") or []]
     # Sub-queries keep the question's product references, even when the planner drops them.
     references = _references(state)
-    extra = await asyncio.gather(*(_search(q, collection_ids, references) for q in queries[1:]))
-    rankings = [state.get("anchors") or state["context"]] + [kept for _, kept in extra]
+    # The sub-queries share what the question left of RERANK_MAX_PAIRS: planning never
+    # multiplies the cost of re-ranking.
+    limit = retrieval.sub_query_rerank_limit(
+        int((state.get("timings") or {}).get("rerank_pairs", 0)), len(queries) - 1
+    )
+    extra = await asyncio.gather(
+        *(retrieval.search(q, collection_ids, references, rerank_limit=limit) for q in queries[1:])
+    )
+    rankings = [state.get("anchors") or state["context"]] + [found.kept for found in extra]
     merged = interleave(rankings, settings.retrieval_top_k)
     vector = await asyncio.to_thread(get_embeddings().embed_query, question)
     context = await retrieval.expand(merged, vector, collection_ids)
@@ -408,6 +429,7 @@ async def plan(state: State) -> dict:
         "context": context,
         "sources": build_sources(context),
         "confidence_metric": confidence_from(merged),
+        "timings": _rerank_timings(extra),
     }
 
 

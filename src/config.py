@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger("contexthub")
@@ -197,6 +197,21 @@ class Settings(BaseSettings):
     retrieval_context_chars: int = 12000
     reranker: Literal["none", "cross_encoder"] = "none"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    # Only the N best candidates after fusion are re-ranked, the others keep their order
+    # behind them: a cross-encoder scores (query, passage) pairs one by one, its cost grows
+    # with every pair (about a second per pair for bge-reranker-v2-m3 on a laptop CPU).
+    rerank_candidates: int = Field(default=30, ge=0)
+    # Pairs scored for one answer, the question and the planner's sub-queries together: the
+    # question takes up to RERANK_CANDIDATES, the sub-queries share what is left equally.
+    rerank_max_pairs: int = Field(default=60, ge=0)
+    # "auto": CUDA when PyTorch sees a GPU, else CPU; or a PyTorch device ("cpu", "cuda:1").
+    reranker_device: str = "auto"
+    # CPU threads for the re-ranker (0 = PyTorch's default, one per physical core).
+    reranker_threads: int = Field(default=0, ge=0)
+    reranker_batch_size: int = Field(default=16, ge=1)
+    # Tokens read per (query, passage) pair: the model accepts 8192, 512 is what it is tuned
+    # for and keeps a long passage from costing ten times a short one.
+    reranker_max_length: int = Field(default=512, ge=32)
     # Local models (re-ranker) are read from the HuggingFace cache only, with no call to the
     # Hub, not even an update check. Download them once with this off, then turn it on.
     hf_hub_offline: bool = False

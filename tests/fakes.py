@@ -195,3 +195,61 @@ def merge_pdfs(*parts: bytes) -> bytes:
     buffer = io.BytesIO()
     writer.write(buffer)
     return buffer.getvalue()
+
+
+class FakeTorch:
+    """The few ``torch`` functions the re-ranker uses (installed in ``sys.modules``)."""
+
+    def __init__(self, cuda: bool = False) -> None:
+        self._cuda = cuda
+        self.threads: int | None = None
+        self.in_inference = False
+        self.cuda = self  # torch.cuda.is_available()
+
+    def is_available(self) -> bool:
+        return self._cuda
+
+    def set_num_threads(self, count: int) -> None:
+        self.threads = count
+
+    def get_num_threads(self) -> int:
+        return self.threads or 4
+
+    def inference_mode(self):
+        torch = self
+
+        class _Mode:
+            def __enter__(self):
+                torch.in_inference = True
+
+            def __exit__(self, *exc):
+                torch.in_inference = False
+
+        return _Mode()
+
+
+class FakeCrossEncoder:
+    """Stand-in for ``sentence_transformers.CrossEncoder``: scores a (query, passage) pair by
+    the query words found in the passage, and records every pair it is asked to score."""
+
+    instances: list[FakeCrossEncoder] = []
+    torch: FakeTorch | None = None
+
+    def __init__(self, model: str, **kwargs: Any) -> None:
+        self.model, self.kwargs = model, kwargs
+        self.pairs: list[tuple[str, str]] = []
+        self.calls: list[dict] = []
+        FakeCrossEncoder.instances.append(self)
+
+    def predict(self, pairs, batch_size: int = 32, show_progress_bar: bool | None = None, **kwargs: Any):
+        torch = FakeCrossEncoder.torch
+        self.calls.append(
+            {"pairs": len(pairs), "batch_size": batch_size, "inference": bool(torch and torch.in_inference)}
+        )
+        self.pairs.extend(pairs)
+        scores = []
+        for query, passage in pairs:
+            words = {w for w in _WORD.findall(query.lower()) if len(w) > 2}
+            text = passage.lower()
+            scores.append(float(sum(1 for w in words if w in text)) + 1.0 / (1 + len(passage)))
+        return scores
