@@ -85,7 +85,7 @@ def test_running_headers_and_footers_are_found_whatever_the_page_number():
 FOOTER_A = "ZX2000/10/20KT Manuel utilisateur"
 PAGES_A = [
     ["Securite", "Lisez les consignes de securite avant toute installation de l armoire.", FOOTER_A],
-    ["Ecran", "Pour desactiver le buzzer declenche par les alarmes generales, selectionnez l icone silence.", FOOTER_A],
+    ["Ecran", "Pour couper l alarme du buzzer, selectionnez l icone silence de l ecran.", FOOTER_A],
     ["Batteries", "Les batteries doivent etre remplacees par un technicien agree.", FOOTER_A],
 ]
 PAGES_B = [
@@ -107,7 +107,8 @@ def test_references_are_stored_on_the_document_and_head_its_passages(admin, two_
     assert doc["product_refs"] == ["ZX2000KT", "ZX2010KT", "ZX2020KT"]
     assert admin.get(f"/documents/{b}").json()["product_refs"] == ["QW5000TS"]
     contents = [c.content for c in store.chunks.values() if str(c.document_id) == a]
-    assert contents and all(c.startswith("[ZX2000KT, ZX2010KT, ZX2020KT") for c in contents)
+    assert contents and all(c.startswith("[ZX2000/10/20KT Manuel utilisateur — ZX2000KT, ZX2010KT, ZX2020KT") for c in contents)
+    assert not any("Manuel utilisateur" in c.split("\n", 1)[1] for c in contents)  # running footer: header only
 
 
 def _search(collection_id: str, question: str) -> retrieval.Retrieval:
@@ -119,7 +120,7 @@ def _search(collection_id: str, question: str) -> retrieval.Retrieval:
 def test_a_cited_reference_favours_the_documents_that_carry_it(two_manuals):
     collection, a, b = two_manuals
     plain = _search(collection["id"], "Mon onduleur bipe, comment eteindre l alarme ?")
-    assert str(plain.kept[0].document_id) == b  # the other product's wording is closer
+    assert plain.kept and str(plain.kept[0].document_id) == b, [(str(c.chunk.document_id) == b, c.chunk.distance) for c in plain.candidates]
     assert plain.asked_refs == [] and all(c.product is None for c in plain.candidates)
 
     cited = _search(collection["id"], QUESTION)

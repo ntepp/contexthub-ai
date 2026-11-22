@@ -66,6 +66,7 @@ class LoadedDocument:
     low_pages: list[int] = field(default_factory=list)  # badly read or unread pages (1-based)
     ocr_confidence: float | None = None  # mean of the OCR pages' confidence (0-100)
     ocr_attempted: bool = False
+    title: str | None = None  # the file's own title (PDF metadata), when it has one
 
     @property
     def read_mode(self) -> str:
@@ -174,6 +175,14 @@ def _non_blank(path: Path, indices: Sequence[int]) -> list[int]:
         return list(indices)
 
 
+def _metadata_title(reader) -> str | None:
+    try:
+        title = reader.metadata.title if reader.metadata else None
+    except Exception:  # damaged information dictionary
+        return None
+    return str(title).strip() or None if title else None
+
+
 def load_pdf(path: Path, options: OcrOptions | None = None) -> LoadedDocument:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -208,7 +217,7 @@ def load_pdf(path: Path, options: OcrOptions | None = None) -> LoadedDocument:
             poor.append(index)
         pages.append(PageText(index + 1, content))
 
-    loaded = LoadedDocument(pages=pages, page_count=len(pages))
+    loaded = LoadedDocument(pages=pages, page_count=len(pages), title=_metadata_title(reader))
     targets = list(range(len(pages))) if options.all_pages else poor
     if not targets:
         return loaded

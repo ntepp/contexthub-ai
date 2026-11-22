@@ -18,7 +18,7 @@ from src.ingestion import storage
 from src.ingestion.chunking import chunk_pages
 from src.ingestion.eu_acts import detect_act
 from src.ingestion.filetypes import IngestionError, sniff
-from src.ingestion.layout import running_lines
+from src.ingestion.layout import document_title, running_lines, strip_running_lines
 from src.ingestion.loaders import OcrOptions, load_file
 from src.ingestion.references import document_references
 from src.ingestion.url_fetch import fetch_url
@@ -107,17 +107,23 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
     act = detect_act(loaded.pages[0].text) if loaded.pages else None
     if act is not None:
         log.info("[ingestion] texte reconnu : %s", act.label)
-    # Product references: the title, the first page and the running headers / footers say
-    # what the document is about; every page counts when a question's reference is matched.
+    # Running headers and footers (paginated documents) say what the document is about and
+    # are noise inside passages: they feed its title and references, then are removed.
+    running = running_lines(loaded.pages)
+    # Heads every passage (embedding, full-text index, LLM context); citations keep the
+    # file name and the recognised act (Document.title), never this detected title.
+    context_title = act.label if act else document_title(loaded.pages, running, loaded.title)
+    # Product references: the title, the first page and the running lines say which product
+    # the document is about; every page counts when a question's reference is matched.
     first_page = loaded.pages[0].text[:_FIRST_PAGE_CHARS] if loaded.pages else ""
     product_refs, heading_refs = document_references(
-        [act.label if act else "", first_page, *running_lines(loaded.pages)], [p.text for p in loaded.pages]
+        [context_title or "", first_page, *running], [p.text for p in loaded.pages]
     )
     chunks = chunk_pages(
-        loaded.pages,
+        strip_running_lines(loaded.pages, running),
         settings.chunk_size,
         settings.chunk_overlap,
-        act.label if act else None,
+        context_title,
         split_definitions=settings.chunk_definitions,
         references=heading_refs,
     )
