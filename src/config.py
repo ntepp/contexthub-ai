@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     # One chunk per definition in definition articles and glossaries (see chunking.py).
     chunk_definitions: bool = True
+    # Technical documents (numbered sections "3.2.2 Titre", tables: manuals, procedures) are cut
+    # into smaller passages, at paragraph breaks (see chunking.py). 0 = cut them like any text.
+    chunk_size_technical: int = 800
     ocr_enabled: bool = True
     ocr_languages: str = "fra+eng"
     # A PDF page whose text layer has fewer letters and digits than this is read by OCR

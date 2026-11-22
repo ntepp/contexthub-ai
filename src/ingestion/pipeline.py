@@ -126,6 +126,7 @@ def ingest_document(document_id: uuid.UUID | str, ocr: OcrOptions | None = None)
         context_title,
         split_definitions=settings.chunk_definitions,
         references=heading_refs,
+        technical_chunk_size=settings.chunk_size_technical or None,
     )
     if not chunks:
         if loaded.ocr_attempted:
